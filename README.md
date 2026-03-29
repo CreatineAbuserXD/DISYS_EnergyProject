@@ -101,7 +101,7 @@ docker compose -f docker/docker-compose.yml down
 
 ### Rules
 
-- **Never push directly to `main`** — use feature branches and Pull Requests (pushing in)
+- **Never push directly to `main`** — use feature branches and Pull Requests (pushing on main shouldn't be possible per repo-settings but just to be sure)
 
 ### How to work on a new feature
 
