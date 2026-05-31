@@ -2,7 +2,9 @@ package at.fhtw.disys.energycommunities.usage;
 
 import at.fhtw.disys.energycommunities.shared.config.RabbitMQConfig;
 import at.fhtw.disys.energycommunities.shared.dto.EnergyMessage;
+import at.fhtw.disys.energycommunities.shared.dto.UpdateMessage;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.Connection;
@@ -24,6 +26,7 @@ public class UsageServiceApp {
 
         ObjectMapper objectMapper = new ObjectMapper();
         objectMapper.registerModule(new JavaTimeModule());
+        objectMapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);   // datetime als lesbaren text schreiben
 
         // Verbindung zur Postgres-Datenbank (Zugangsdaten siehe docker-compose)
         String dbUrl = "jdbc:postgresql://localhost:5432/energycommunities";
@@ -41,6 +44,10 @@ public class UsageServiceApp {
         channel.exchangeDeclare(RabbitMQConfig.EXCHANGE_NAME, "direct", true);
         channel.queueDeclare(RabbitMQConfig.QUEUE_ENERGY, true, false, false, null);
         channel.queueBind(RabbitMQConfig.QUEUE_ENERGY, RabbitMQConfig.EXCHANGE_NAME, RabbitMQConfig.ROUTING_KEY_ENERGY);
+
+        // Update-Queue deklarieren, in die wir nach jedem DB-Update eine Nachricht fuer den Percentage Service schicken
+        channel.queueDeclare(RabbitMQConfig.QUEUE_UPDATE, true, false, false, null);
+        channel.queueBind(RabbitMQConfig.QUEUE_UPDATE, RabbitMQConfig.EXCHANGE_NAME, RabbitMQConfig.ROUTING_KEY_UPDATE);
 
         // Diese Methode wird fuer jede ankommende Nachricht aufgerufen
         DeliverCallback deliverCallback = (consumerTag, delivery) -> {
@@ -91,6 +98,12 @@ public class UsageServiceApp {
                 upsert.setDouble(4, grid);
                 upsert.executeUpdate();
                 upsert.close();
+
+                // 4. Update-Nachricht an den Percentage Service schicken (neue Stundenwerte sind da)
+                UpdateMessage update = new UpdateMessage(bucketHour, produced, used, grid);
+                String updateJson = objectMapper.writeValueAsString(update);
+                channel.basicPublish(RabbitMQConfig.EXCHANGE_NAME, RabbitMQConfig.ROUTING_KEY_UPDATE,
+                        null, updateJson.getBytes(StandardCharsets.UTF_8));
 
                 System.out.println("Updated " + bucketHour + " -> produced=" + produced + ", used=" + used + ", grid=" + grid);
             } catch (SQLException e) {
