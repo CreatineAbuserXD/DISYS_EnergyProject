@@ -17,7 +17,7 @@ public class EnergyProducerApp {
     public static void main(String[] args) throws Exception {
         System.out.println("Energy Producer started.");
 
-        // 1. Ask the weather API how cloudy it is in Vienna (once, at startup).
+        // API-Abfrage um das cloud cover auf der FH zu bekommen
         WeatherClient weatherClient = new WeatherClient();
         double cloudCover = weatherClient.getCloudCover();
         System.out.println("Cloud cover is " + cloudCover + "%");

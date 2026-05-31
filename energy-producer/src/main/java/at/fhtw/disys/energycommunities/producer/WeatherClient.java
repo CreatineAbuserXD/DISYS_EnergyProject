@@ -10,14 +10,14 @@ import java.net.http.HttpResponse;
 
 public class WeatherClient {
 
-    // this takes vienna as starting point
-    // we use the low clouds, because those are the ones that actually block the sun for a solar panel
-    private static final String WEATHER_API = "https://api.open-meteo.com/v1/forecast?latitude=48.21&longitude=16.37&current=cloud_cover_low";
+    // wir haben uns einfach für open-meteo entschieden, siehe auch project_specification
+    // cloud_cover liefert tw. sehr viel coverage (somit wenig produktion), laut internet sind aber vor allem die
+    // niedrigen wolken ausschlaggebend --> daher wurde auf endpunkt cloud_cover_low umgestellt
+    // koordinaten sind ca. die fh (api rundet immer auf 2 nachkommastellen, daher nicht genau perfekt aber gut genug)
+    private static final String WEATHER_API = "https://api.open-meteo.com/v1/forecast?latitude=48.24&longitude=16.38&current=cloud_cover_low";
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    // Returns the current low-cloud cover in Vienna (0-100%).
-    // If the API call fails, returns 50% so the producer keeps running.
     public double getCloudCover() {
         try {
             HttpClient client = HttpClient.newHttpClient();
@@ -32,12 +32,12 @@ public class WeatherClient {
             JsonNode root = objectMapper.readTree(response.body());
             return root.path("current").path("cloud_cover_low").asDouble();
         } catch (Exception e) {
-            System.out.println("Weather API call failed, using default cloud cover of 50%.");
+            System.out.println("API-call-Fehler: Für die Berechnung wird 50% cloud-cover angenommen. Überprüfe WEATHER_API!");
             return 50.0;
         }
     }
 
-    // lets you run this file on its own to check the weather API works
+    // Test-main um API-Antwort zu testen
     public static void main(String[] args) {
         System.out.println("Cloud cover: " + new WeatherClient().getCloudCover() + "%");
     }
