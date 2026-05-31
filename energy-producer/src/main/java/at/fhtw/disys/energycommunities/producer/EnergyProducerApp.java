@@ -21,13 +21,13 @@ public class EnergyProducerApp {
         WeatherClient weatherClient = new WeatherClient();
         double cloudCover = weatherClient.getCloudCover();
         System.out.println("Cloud cover is " + cloudCover + "%");
+        long lastWeatherFetch = System.currentTimeMillis();   // die letzte Abfrage merken --> für Vergleich, wann wieder neue gemacht werden muss
 
-        // 2. Set up the tool that turns our message object into JSON text.
         ObjectMapper objectMapper = new ObjectMapper();
-        objectMapper.registerModule(new JavaTimeModule());                 // needed so it can write the datetime
-        objectMapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS); // write the datetime as a readable text
+        objectMapper.registerModule(new JavaTimeModule());
+        objectMapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
 
-        // 3. Connect to RabbitMQ.
+        // Verbindung zu RabbitMQ herstellen (siehe auch shared --> RabbitMQConfig)
         ConnectionFactory factory = new ConnectionFactory();
         factory.setHost(RabbitMQConfig.HOST);
         factory.setPort(RabbitMQConfig.PORT);
@@ -35,20 +35,23 @@ public class EnergyProducerApp {
         Connection connection = factory.newConnection();
         Channel channel = connection.createChannel();
 
-        // Make sure the exchange and the energy queue exist and are linked together.
         channel.exchangeDeclare(RabbitMQConfig.EXCHANGE_NAME, "direct", true);
         channel.queueDeclare(RabbitMQConfig.QUEUE_ENERGY, true, false, false, null);
         channel.queueBind(RabbitMQConfig.QUEUE_ENERGY, RabbitMQConfig.EXCHANGE_NAME, RabbitMQConfig.ROUTING_KEY_ENERGY);
 
-        // 4. Keep sending production messages forever (stop with Ctrl+C).
+        // infinite loop, Messages immer schicken, wenn ausgeführt
         while (true) {
-            // More sun (less cloud) means more energy. sunFactor is 1.0 at clear sky and still
-            // 0.2 when fully overcast, because a solar panel always produces a little.
+            // die API liefert ja alle 15 Minuten neue Daten ("interval": 900), daher hier checken, ob ein neuer Request nötig ist
+            if (System.currentTimeMillis() - lastWeatherFetch > 15 * 60 * 1000) {
+                cloudCover = weatherClient.getCloudCover();
+                lastWeatherFetch = System.currentTimeMillis();
+                System.out.println("Refreshed cloud cover: " + cloudCover + "%");
+            }
+
+            // der sunFactor hängt vom cloud cover ab, zusätzlich wurde in der Spezifikation noch ein random Wert gefordert
             double sunFactor = 0.2 + 0.8 * (100.0 - cloudCover) / 100.0;
-            // A random factor between 0.8 and 1.2 so the value is not always the same.
             double jitter = 0.8 + Math.random() * 0.4;
-            // Base production of 0.005 kWh per message, scaled by sun and randomness.
-            double kwh = 0.005 * sunFactor * jitter;
+            double kwh = 0.005 * sunFactor * jitter; // hier noch mit einem "realistischen" wert skalieren
 
             EnergyMessage message = new EnergyMessage("PRODUCER", "COMMUNITY", kwh, LocalDateTime.now());
 
@@ -57,7 +60,7 @@ public class EnergyProducerApp {
                     null, json.getBytes(StandardCharsets.UTF_8));
             System.out.println("Sent: " + json);
 
-            // Wait a random time between 1 and 5 seconds before sending the next message.
+            // erfüllt: "random 1-5 second intervals"
             int waitMillis = 1000 + (int) (Math.random() * 4000);
             Thread.sleep(waitMillis);
         }
