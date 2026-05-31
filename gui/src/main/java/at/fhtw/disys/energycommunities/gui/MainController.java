@@ -82,11 +82,11 @@ public class MainController {
         task.setOnSucceeded(event -> {
             PercentageRecord currentEnergy = task.getValue();
             communityDepletedLabel.setText(String.format(
-                    "Community Depleted: %.2f kWh",
+                    "Community Depleted: %.2f %%",
                     currentEnergy.getCommunityDepleted()
             ));
             gridPortionLabel.setText(String.format(
-                    "Grid Portion: %.2f kWh",
+                    "Grid Portion: %.2f %%",
                     currentEnergy.getGridPortion()
             ));
         });
