@@ -11,11 +11,12 @@ import java.net.http.HttpResponse;
 public class WeatherClient {
 
     // this takes vienna as starting point
-    private static final String WEATHER_API = "https://api.open-meteo.com/v1/forecast?latitude=48.21&longitude=16.37&current=cloud_cover";
+    // we use the low clouds, because those are the ones that actually block the sun for a solar panel
+    private static final String WEATHER_API = "https://api.open-meteo.com/v1/forecast?latitude=48.21&longitude=16.37&current=cloud_cover_low";
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    // Returns the current cloud cover in Vienna (0-100%).
+    // Returns the current low-cloud cover in Vienna (0-100%).
     // If the API call fails, returns 50% so the producer keeps running.
     public double getCloudCover() {
         try {
@@ -29,7 +30,7 @@ public class WeatherClient {
             HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
 
             JsonNode root = objectMapper.readTree(response.body());
-            return root.path("current").path("cloud_cover").asDouble();
+            return root.path("current").path("cloud_cover_low").asDouble();
         } catch (Exception e) {
             System.out.println("Weather API call failed, using default cloud cover of 50%.");
             return 50.0;
