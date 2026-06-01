@@ -10,6 +10,9 @@ import com.rabbitmq.client.ConnectionFactory;
 import com.rabbitmq.client.DeliverCallback;
 
 import java.nio.charset.StandardCharsets;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
 
 public class PercentageServiceApp {
 
@@ -19,6 +22,11 @@ public class PercentageServiceApp {
         // JSON-Tool, um eine empfangene Nachricht zurueck in ein UpdateMessage-Objekt umzuwandeln.
         ObjectMapper objectMapper = new ObjectMapper();
         objectMapper.registerModule(new JavaTimeModule());   // damit das datetime gelesen werden kann
+
+        // Verbindung zur Postgres-Datenbank (Zugangsdaten siehe docker-compose)
+        String dbUrl = "jdbc:postgresql://localhost:5432/energycommunities";
+        java.sql.Connection db = DriverManager.getConnection(dbUrl, "disysuser", "disyspw");
+        System.out.println("Connected to database.");
 
         // Verbindung zu RabbitMQ herstellen (siehe shared --> RabbitMQConfig)
         ConnectionFactory factory = new ConnectionFactory();
@@ -37,10 +45,36 @@ public class PercentageServiceApp {
         DeliverCallback deliverCallback = (consumerTag, delivery) -> {
             String json = new String(delivery.getBody(), StandardCharsets.UTF_8);
             UpdateMessage message = objectMapper.readValue(json, UpdateMessage.class);
-            System.out.println("Received update for " + message.getBucketHour()
-                    + " -> produced=" + message.getCommunityProduced()
-                    + ", used=" + message.getCommunityUsed()
-                    + ", grid=" + message.getGridUsed());
+
+            double produced = message.getCommunityProduced();
+            double used = message.getCommunityUsed();
+            double grid = message.getGridUsed();
+
+            // 1. die zwei Prozentwerte berechnen (die ? : verhindern Division durch 0)
+            double communityDepleted = produced > 0 ? Math.min(100.0, used / produced * 100.0) : 0.0;
+            double total = used + grid;
+            double gridPortion = total > 0 ? grid / total * 100.0 : 0.0;
+
+            try {
+                // 2. Upsert: eine Zeile pro Stunde, wird bei jeder Update-Nachricht ueberschrieben
+                PreparedStatement upsert = db.prepareStatement(
+                        "INSERT INTO percentage_record (bucket_hour, community_depleted, grid_portion) " +
+                        "VALUES (?, ?, ?) " +
+                        "ON CONFLICT (bucket_hour) DO UPDATE SET " +
+                        "community_depleted = EXCLUDED.community_depleted, " +
+                        "grid_portion = EXCLUDED.grid_portion, " +
+                        "updated_at = NOW()");
+                upsert.setObject(1, message.getBucketHour());
+                upsert.setDouble(2, communityDepleted);
+                upsert.setDouble(3, gridPortion);
+                upsert.executeUpdate();
+                upsert.close();
+
+                System.out.println("Percentages for " + message.getBucketHour()
+                        + " -> community_depleted=" + communityDepleted + "%, grid_portion=" + gridPortion + "%");
+            } catch (SQLException e) {
+                System.out.println("DB-Fehler: " + e.getMessage());
+            }
         };
 
         // Consumer starten. autoAck=true: eine Nachricht gilt sofort als erledigt.
