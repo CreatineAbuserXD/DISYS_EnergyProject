@@ -2,56 +2,74 @@ package at.fhtw.disys.energycommunities.restapi.controller;
 
 import at.fhtw.disys.energycommunities.shared.model.PercentageRecord;
 import at.fhtw.disys.energycommunities.shared.model.UsageBucket;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.LocalDateTime;
-import java.util.ArrayList;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 
 @RestController
 @RequestMapping("/energy")
 public class EnergyController {
 
-    @GetMapping("/current")
-    public PercentageRecord getCurrent() {
-        PercentageRecord record = new PercentageRecord();
-        record.setBucketHour(LocalDateTime.now().truncatedTo(java.time.temporal.ChronoUnit.HOURS));
-        record.setCommunityDepleted(15.6);
-        record.setGridPortion(4.7);
-        return record;
+    // Spring stellt das JdbcTemplate automatisch bereit (Verbindung aus den application.properties).
+    private final JdbcTemplate jdbcTemplate;
+
+    public EnergyController(JdbcTemplate jdbcTemplate) {
+        this.jdbcTemplate = jdbcTemplate;
     }
 
+    // Liefert die Prozentwerte der aktuellen Stunde aus percentage_record.
+    @GetMapping("/current")
+    public PercentageRecord getCurrent() {
+        LocalDateTime currentHour = LocalDateTime.now().truncatedTo(ChronoUnit.HOURS);
+
+        List<PercentageRecord> rows = jdbcTemplate.query(
+                "SELECT bucket_hour, community_depleted, grid_portion FROM percentage_record WHERE bucket_hour = ?",
+                (rs, rowNum) -> {
+                    PercentageRecord record = new PercentageRecord();
+                    record.setBucketHour(rs.getTimestamp("bucket_hour").toLocalDateTime());
+                    record.setCommunityDepleted(rs.getDouble("community_depleted"));
+                    record.setGridPortion(rs.getDouble("grid_portion"));
+                    return record;
+                },
+                currentHour);
+
+        if (rows.isEmpty()) {
+            // Fuer diese Stunde gibt es noch keine Daten -> Nullen zurückgeben
+            PercentageRecord empty = new PercentageRecord();
+            empty.setBucketHour(currentHour);
+            empty.setCommunityDepleted(0);
+            empty.setGridPortion(0);
+            return empty;
+        }
+        return rows.get(0);
+    }
+
+    // Liefert die Stundenwerte aus usage_bucket fuer den gewaehlten Zeitraum.
     @GetMapping("/historical")
     public List<UsageBucket> getHistorical(
             @RequestParam String start,
             @RequestParam String end) {
 
-        List<UsageBucket> historical = new ArrayList<>();
+        LocalDateTime startTime = LocalDateTime.parse(start);
+        LocalDateTime endTime = LocalDateTime.parse(end);
 
-        UsageBucket b1 = new UsageBucket();
-        b1.setBucketHour(LocalDateTime.of(2026, 3, 29, 9, 0));
-        b1.setCommunityProduced(18.05);
-        b1.setCommunityUsed(18.05);
-        b1.setGridUsed(1.07);
-        historical.add(b1);
-
-        UsageBucket b2 = new UsageBucket();
-        b2.setBucketHour(LocalDateTime.of(2026, 3, 29, 10, 0));
-        b2.setCommunityProduced(22.10);
-        b2.setCommunityUsed(19.50);
-        b2.setGridUsed(3.20);
-        historical.add(b2);
-
-        UsageBucket b3 = new UsageBucket();
-        b3.setBucketHour(LocalDateTime.of(2026, 3, 29, 11, 0));
-        b3.setCommunityProduced(15.80);
-        b3.setCommunityUsed(15.80);
-        b3.setGridUsed(0.50);
-        historical.add(b3);
-
-        return historical;
+        return jdbcTemplate.query(
+                "SELECT bucket_hour, community_produced, community_used, grid_used FROM usage_bucket "
+                        + "WHERE bucket_hour BETWEEN ? AND ? ORDER BY bucket_hour",
+                (rs, rowNum) -> {
+                    UsageBucket bucket = new UsageBucket();
+                    bucket.setBucketHour(rs.getTimestamp("bucket_hour").toLocalDateTime());
+                    bucket.setCommunityProduced(rs.getDouble("community_produced"));
+                    bucket.setCommunityUsed(rs.getDouble("community_used"));
+                    bucket.setGridUsed(rs.getDouble("grid_used"));
+                    return bucket;
+                },
+                startTime, endTime);
     }
 }
