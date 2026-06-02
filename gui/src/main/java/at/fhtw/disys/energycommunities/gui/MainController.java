@@ -4,17 +4,15 @@ import at.fhtw.disys.energycommunities.shared.model.PercentageRecord;
 import at.fhtw.disys.energycommunities.shared.model.UsageBucket;
 import javafx.collections.FXCollections;
 import javafx.concurrent.Task;
-import javafx.event.ActionEvent;
 import javafx.fxml.FXML;
-import javafx.scene.control.DatePicker;
-import javafx.scene.control.Label;
-import javafx.scene.control.TableColumn;
-import javafx.scene.control.TableView;
+import javafx.scene.control.*;
 import javafx.scene.control.cell.PropertyValueFactory;
+import javafx.util.StringConverter;
 
 import java.io.IOException;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 
 public class MainController {
@@ -60,15 +58,45 @@ public class MainController {
 
         startDatePicker.setValue(LocalDate.now().minusDays(1));
         endDatePicker.setValue(LocalDate.now());
+
+        setRoundedCellFactory(communityProducedColumn);
+        setRoundedCellFactory(communityUsedColumn);
+        setRoundedCellFactory(gridUsedColumn);
+
+        setGermanFormat(startDatePicker);
+        setGermanFormat(endDatePicker);
+    }
+
+    private <T> void setRoundedCellFactory(TableColumn<T, Double> column) {
+        column.setCellFactory(col -> new TableCell<>() {
+            @Override
+            protected void updateItem(Double value, boolean empty) {
+                super.updateItem(value, empty);
+                setText(empty || value == null ? null : String.format("%.3f", value));
+            }
+        });
+    }
+
+    private void setGermanFormat(DatePicker datePicker) {
+        datePicker.setConverter(new StringConverter<>() {
+            final DateTimeFormatter formatter = DateTimeFormatter.ofPattern("d.M.yyyy");
+
+            @Override
+            public String toString(LocalDate date) {
+                return date != null ? formatter.format(date) : "";
+            }
+
+            @Override
+            public LocalDate fromString(String string) {
+                return (string != null && !string.isEmpty())
+                        ? LocalDate.parse(string, formatter)
+                        : null;
+            }
+        });
     }
 
     @FXML
-    public void getCurrentEnergy(ActionEvent actionEvent) {
-        onSeeCurrentEnergy(actionEvent);
-    }
-
-    @FXML
-    public void onSeeCurrentEnergy(ActionEvent actionEvent) {
+    public void onSeeCurrentEnergy() {
         communityDepletedLabel.setText("Community Depleted: loading...");
         gridPortionLabel.setText("Grid Portion: loading...");
 
@@ -109,7 +137,7 @@ public class MainController {
     }
 
     @FXML
-    public void onLoadHistoricalEnergy(ActionEvent actionEvent) {
+    public void onLoadHistoricalEnergy() {
         LocalDate startDate = startDatePicker.getValue();
         LocalDate endDate = endDatePicker.getValue();
 
