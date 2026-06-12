@@ -56,7 +56,14 @@ public class PercentageServiceApp {
             double gridPortion = total > 0 ? grid / total * 100.0 : 0.0;
 
             try {
-                // 2. Upsert: eine Zeile pro Stunde, wird bei jeder Update-Nachricht ueberschrieben
+                // 2. Spec: die Tabelle haelt nur die aktuelle Stunde -> alte Stunden vorher loeschen
+                PreparedStatement clean = db.prepareStatement(
+                        "DELETE FROM percentage_record WHERE bucket_hour <> ?");
+                clean.setObject(1, message.getBucketHour());
+                clean.executeUpdate();
+                clean.close();
+
+                // 3. Upsert: die aktuelle Stunde schreiben bzw. bei jeder Update-Nachricht ueberschreiben
                 PreparedStatement upsert = db.prepareStatement(
                         "INSERT INTO percentage_record (bucket_hour, community_depleted, grid_portion) " +
                         "VALUES (?, ?, ?) " +
