@@ -23,7 +23,6 @@ public class EnergyController {
         this.jdbcTemplate = jdbcTemplate;
     }
 
-    // Liefert die Prozentwerte der aktuellen Stunde aus percentage_record.
     @GetMapping("/current")
     public PercentageRecord getCurrent() {
         LocalDateTime currentHour = LocalDateTime.now().truncatedTo(ChronoUnit.HOURS);
@@ -39,8 +38,7 @@ public class EnergyController {
                 },
                 currentHour);
 
-        if (rows.isEmpty()) {
-            // Fuer diese Stunde gibt es noch keine Daten -> Nullen zurückgeben
+        if (rows.isEmpty()) { // für diese Stunde gibt es noch keine Daten -> Nullen zurückgeben
             PercentageRecord empty = new PercentageRecord();
             empty.setBucketHour(currentHour);
             empty.setCommunityDepleted(0);
@@ -50,7 +48,6 @@ public class EnergyController {
         return rows.get(0);
     }
 
-    // Liefert die Stundenwerte aus usage_bucket fuer den gewaehlten Zeitraum.
     @GetMapping("/historical")
     public List<UsageBucket> getHistorical(
             @RequestParam String start,

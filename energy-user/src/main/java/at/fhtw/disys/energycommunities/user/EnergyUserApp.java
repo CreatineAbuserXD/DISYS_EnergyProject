@@ -15,29 +15,13 @@ import java.time.LocalDateTime;
 public class EnergyUserApp {
 
     public static void main(String[] args) throws Exception {
-        System.out.println("Energy Users started.");
-
-        Thread user1 = new Thread(() -> runUser("User1"));
-        //Thread user2 = new Thread(() -> runUser("User2"));
-
-        user1.setDaemon(true);
-        //user2.setDaemon(true);
-
-        user1.start();
-        //user2.start();
-
-        user1.join();
-        //user2.join();
-    }
-
-    private static void runUser(String name) {
-        System.out.println("Energy User " + name + " started.");
+        System.out.println("Energy User started.");
 
         ObjectMapper objectMapper = new ObjectMapper();
         objectMapper.registerModule(new JavaTimeModule());
         objectMapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
 
-        // Verbindung zu RabbitMQ herstellen (siehe auch shared --> RabbitMQConfig)
+        // genaue connection-details für message broker: RabbitMQConfig
         ConnectionFactory factory = new ConnectionFactory();
         factory.setHost(RabbitMQConfig.HOST);
         factory.setPort(RabbitMQConfig.PORT);
@@ -49,7 +33,6 @@ public class EnergyUserApp {
             channel.queueDeclare(RabbitMQConfig.QUEUE_ENERGY, true, false, false, null);
             channel.queueBind(RabbitMQConfig.QUEUE_ENERGY, RabbitMQConfig.EXCHANGE_NAME, RabbitMQConfig.ROUTING_KEY_ENERGY);
 
-            // infinite loop, Messages immer schicken, wenn ausgeführt
             while (true) {
 
                 // die folgenden Werte sind reine Annahmen (grobe kWh/min-Werte wurden gesucht, keine genau auf Wien bezogenen)
@@ -74,14 +57,14 @@ public class EnergyUserApp {
                 String json = objectMapper.writeValueAsString(message);
                 channel.basicPublish(RabbitMQConfig.EXCHANGE_NAME, RabbitMQConfig.ROUTING_KEY_ENERGY,
                         null, json.getBytes(StandardCharsets.UTF_8));
-                System.out.println("[" + name + "] Sent: " + json);
+                System.out.println("Sent: " + json);
 
                 // erfüllt: "random 1-5 second intervals"
                 int waitMillis = 1000 + (int) (Math.random() * 4000);
                 Thread.sleep(waitMillis);
             }
         } catch (Exception e) {
-            System.out.println("[" + name + "] Error: " + e.getMessage());
+            System.out.println("Error: " + e.getMessage());
         }
     }
 }

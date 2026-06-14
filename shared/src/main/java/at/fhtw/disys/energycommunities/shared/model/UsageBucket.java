@@ -4,21 +4,12 @@ import java.time.LocalDateTime;
 
 public class UsageBucket {
 
-    private long id;
     private LocalDateTime bucketHour;
     private double communityProduced;
     private double communityUsed;
     private double gridUsed;
 
     public UsageBucket() {
-    }
-
-    public long getId() {
-        return id;
-    }
-
-    public void setId(long id) {
-        this.id = id;
     }
 
     public LocalDateTime getBucketHour() {

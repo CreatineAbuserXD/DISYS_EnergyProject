@@ -25,11 +25,10 @@ public class UsageServiceApp {
         System.out.println("Usage Service started.");
 
         ObjectMapper objectMapper = new ObjectMapper();
-        objectMapper.registerModule(new JavaTimeModule());
-        objectMapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);   // datetime als lesbaren text schreiben
+        objectMapper.registerModule(new JavaTimeModule()); // damit das datetime gelesen werden kann
+        objectMapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
 
-        // Verbindung zur Postgres-Datenbank (Zugangsdaten siehe docker-compose)
-        String dbUrl = "jdbc:postgresql://localhost:5432/energycommunities";
+        String dbUrl = "jdbc:postgresql://localhost:5432/energycommunities"; // Zugangsdaten siehe docker-compose
         java.sql.Connection db = DriverManager.getConnection(dbUrl, "disysuser", "disyspw");
         System.out.println("Connected to database.");
 
@@ -45,20 +44,18 @@ public class UsageServiceApp {
             channel.queueDeclare(RabbitMQConfig.QUEUE_ENERGY, true, false, false, null);
             channel.queueBind(RabbitMQConfig.QUEUE_ENERGY, RabbitMQConfig.EXCHANGE_NAME, RabbitMQConfig.ROUTING_KEY_ENERGY);
 
-            // Update-Queue deklarieren, in die wir nach jedem DB-Update eine Nachricht für den Percentage Service schicken
             channel.queueDeclare(RabbitMQConfig.QUEUE_UPDATE, true, false, false, null);
             channel.queueBind(RabbitMQConfig.QUEUE_UPDATE, RabbitMQConfig.EXCHANGE_NAME, RabbitMQConfig.ROUTING_KEY_UPDATE);
 
-            // Diese Methode wird für jede ankommende Nachricht aufgerufen
             DeliverCallback deliverCallback = (consumerTag, delivery) -> {
                 String json = new String(delivery.getBody(), StandardCharsets.UTF_8);
                 EnergyMessage message = objectMapper.readValue(json, EnergyMessage.class);
 
-                // auf die volle Stunde abrunden, z.B. 14:34 → 14:00
+                // auf volle Stunde abrunden
                 LocalDateTime bucketHour = message.getDatetime().truncatedTo(ChronoUnit.HOURS);
 
                 try {
-                    // 1. aktuellen Stand dieser Stunde lesen (oder 0, falls die Stunde noch nicht existiert)
+                    // aktuellen Stand dieser Stunde lesen (oder 0, falls die Stunde noch nicht existiert)
                     double produced = 0, used = 0, grid = 0;
 
                     PreparedStatement select = db.prepareStatement(
@@ -75,18 +72,17 @@ public class UsageServiceApp {
                     rs.close();
                     select.close();
 
-                    // 2. Geschäftslogik anwenden
                     if (message.getType().equals("PRODUCER")) {
                         produced += message.getKwh();
                     } else { // USER
-                        double available = produced - used;                            // noch verfuegbare Gemeinschaftsenergie
+                        double available = produced - used;                            // noch verfügbare Gemeinschaftsenergie
                         double fromCommunity = Math.min(message.getKwh(), available);   // zuerst aus der Gemeinschaft
                         double fromGrid = message.getKwh() - fromCommunity;             // Rest aus dem Netz
                         used += fromCommunity;
                         grid += fromGrid;
                     }
 
-                    // 3. zurückschreiben: Stunde anlegen oder aktualisieren (Upsert)
+                    // Stunde anlegen oder aktualisieren (mit nativem upsert)
                     PreparedStatement upsert = db.prepareStatement(
                             "INSERT INTO usage_bucket (bucket_hour, community_produced, community_used, grid_used) " +
                                     "VALUES (?, ?, ?, ?) " +
@@ -102,7 +98,6 @@ public class UsageServiceApp {
                     upsert.executeUpdate();
                     upsert.close();
 
-                    // 4. Update-Nachricht an den Percentage Service schicken (neue Stundenwerte sind da)
                     UpdateMessage update = new UpdateMessage(bucketHour, produced, used, grid);
                     String updateJson = objectMapper.writeValueAsString(update);
                     channel.basicPublish(RabbitMQConfig.EXCHANGE_NAME, RabbitMQConfig.ROUTING_KEY_UPDATE,
@@ -114,12 +109,12 @@ public class UsageServiceApp {
                 }
             };
 
-            // Consumer starten. autoAck=true: eine Nachricht gilt sofort als erledigt, sobald abgeholt
+            // Consumer starten, autoAck=true: eine Nachricht gilt sofort als erledigt, sobald abgeholt
             channel.basicConsume(RabbitMQConfig.QUEUE_ENERGY, true, deliverCallback, consumerTag -> {
             });
 
             System.out.println("Waiting for messages...");
-            // Programm läuft einfach weiter, auch wenn keine Messages mehr in der Queue sind
+            // Service läuft einfach weiter, auch wenn keine Messages mehr in der Queue sind
             Thread.currentThread().join();
         }
     }

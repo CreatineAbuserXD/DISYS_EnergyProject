@@ -36,9 +36,4 @@ public class WeatherClient {
             return 50.0;
         }
     }
-
-    // Test-main um API-Antwort zu testen
-    public static void main(String[] args) {
-        System.out.println("Cloud cover: " + new WeatherClient().getCloudCover() + "%");
-    }
 }

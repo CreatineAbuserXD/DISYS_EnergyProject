@@ -4,20 +4,11 @@ import java.time.LocalDateTime;
 
 public class PercentageRecord {
 
-    private long id;
     private LocalDateTime bucketHour;
     private double communityDepleted;
     private double gridPortion;
 
     public PercentageRecord() {
-    }
-
-    public long getId() {
-        return id;
-    }
-
-    public void setId(long id) {
-        this.id = id;
     }
 
     public LocalDateTime getBucketHour() {
