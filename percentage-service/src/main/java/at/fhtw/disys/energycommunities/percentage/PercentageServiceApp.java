@@ -19,12 +19,10 @@ public class PercentageServiceApp {
     public static void main(String[] args) throws Exception {
         System.out.println("Percentage Service started.");
 
-        // JSON-Tool, um eine empfangene Nachricht zurueck in ein UpdateMessage-Objekt umzuwandeln.
         ObjectMapper objectMapper = new ObjectMapper();
         objectMapper.registerModule(new JavaTimeModule());   // damit das datetime gelesen werden kann
 
-        // Verbindung zur Postgres-Datenbank (Zugangsdaten siehe docker-compose)
-        String dbUrl = "jdbc:postgresql://localhost:5432/energycommunities";
+        String dbUrl = "jdbc:postgresql://localhost:5432/energycommunities"; // Zugangsdaten siehe docker-compose
         java.sql.Connection db = DriverManager.getConnection(dbUrl, "disysuser", "disyspw");
         System.out.println("Connected to database.");
 
@@ -36,12 +34,11 @@ public class PercentageServiceApp {
         Connection connection = factory.newConnection();
         Channel channel = connection.createChannel();
 
-        // Exchange + Update-Queue + Binding deklarieren - gleiche Parameter wie beim Usage Service!
+        // Exchange + Update-Queue deklarieren - gleiche Parameter wie beim Usage Service!
         channel.exchangeDeclare(RabbitMQConfig.EXCHANGE_NAME, "direct", true);
         channel.queueDeclare(RabbitMQConfig.QUEUE_UPDATE, true, false, false, null);
         channel.queueBind(RabbitMQConfig.QUEUE_UPDATE, RabbitMQConfig.EXCHANGE_NAME, RabbitMQConfig.ROUTING_KEY_UPDATE);
 
-        // Diese Methode wird fuer JEDE ankommende Update-Nachricht aufgerufen.
         DeliverCallback deliverCallback = (consumerTag, delivery) -> {
             String json = new String(delivery.getBody(), StandardCharsets.UTF_8);
             UpdateMessage message = objectMapper.readValue(json, UpdateMessage.class);
@@ -50,7 +47,7 @@ public class PercentageServiceApp {
             double used = message.getCommunityUsed();
             double grid = message.getGridUsed();
 
-            // 1. die zwei Prozentwerte berechnen (die Guards verhindern Division durch 0)
+            // die zwei Prozentwerte berechnen (die Guards verhindern Division durch 0)
             double communityDepleted = 0.0;
             if (produced > 0) {
                 communityDepleted = Math.min(100.0, used / produced * 100.0);
@@ -63,14 +60,12 @@ public class PercentageServiceApp {
             }
 
             try {
-                // 2. Spec: die Tabelle haelt nur die aktuelle Stunde -> alte Stunden vorher loeschen
                 PreparedStatement clean = db.prepareStatement(
                         "DELETE FROM percentage_record WHERE bucket_hour <> ?");
                 clean.setObject(1, message.getBucketHour());
                 clean.executeUpdate();
                 clean.close();
 
-                // 3. Upsert: die aktuelle Stunde schreiben bzw. bei jeder Update-Nachricht ueberschreiben
                 PreparedStatement upsert = db.prepareStatement(
                         "INSERT INTO percentage_record (bucket_hour, community_depleted, grid_portion) " +
                         "VALUES (?, ?, ?) " +
@@ -91,11 +86,11 @@ public class PercentageServiceApp {
             }
         };
 
-        // Consumer starten. autoAck=true: eine Nachricht gilt sofort als erledigt.
+        // Consumer starten. autoAck=true: eine Nachricht gilt sofort als erledigt, sobald abgeholt
         channel.basicConsume(RabbitMQConfig.QUEUE_UPDATE, true, deliverCallback, consumerTag -> { });
 
         System.out.println("Waiting for update messages...");
-        // Programm am Leben halten, damit der Consumer weiter Nachrichten empfaengt (laeuft bis Ctrl+C).
+        // Service läuft einfach weiter, auch wenn keine Messages mehr in der Queue sind
         Thread.currentThread().join();
     }
 }

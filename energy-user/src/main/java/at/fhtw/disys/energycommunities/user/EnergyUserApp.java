@@ -21,7 +21,7 @@ public class EnergyUserApp {
         objectMapper.registerModule(new JavaTimeModule());
         objectMapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
 
-        // Verbindung zu RabbitMQ herstellen (siehe auch shared --> RabbitMQConfig)
+        // genaue connection-details für message broker: RabbitMQConfig
         ConnectionFactory factory = new ConnectionFactory();
         factory.setHost(RabbitMQConfig.HOST);
         factory.setPort(RabbitMQConfig.PORT);
@@ -33,7 +33,6 @@ public class EnergyUserApp {
             channel.queueDeclare(RabbitMQConfig.QUEUE_ENERGY, true, false, false, null);
             channel.queueBind(RabbitMQConfig.QUEUE_ENERGY, RabbitMQConfig.EXCHANGE_NAME, RabbitMQConfig.ROUTING_KEY_ENERGY);
 
-            // infinite loop, Messages immer schicken, wenn ausgeführt
             while (true) {
 
                 // die folgenden Werte sind reine Annahmen (grobe kWh/min-Werte wurden gesucht, keine genau auf Wien bezogenen)

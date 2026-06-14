@@ -1,10 +1,3 @@
-// --- GUI DEVELOPMENT (JavaFX) ---
-// [ ] Initialize JavaFX Application & Scene
-// [ ] Build Input Components (Buttons/Fields for REST API triggers)
-// [ ] Implement REST API Integration (Fetching hour/historic energy data)
-// [ ] Design Data Display (Tables, Labels, or Text Areas)
-// [ ] Finalize Layout (Focus on simplicity and clarity)
-
 package at.fhtw.disys.energycommunities.gui;
 
 import javafx.application.Application;
