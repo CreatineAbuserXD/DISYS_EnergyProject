@@ -56,9 +56,9 @@
     <TableView fx:id="historicalTable" prefHeight="260.0">
         <columns>
             <TableColumn fx:id="bucketHourColumn" text="Hour" prefWidth="180.0"/>
-            <TableColumn fx:id="communityProducedColumn" text="Produced" prefWidth="140.0"/>
-            <TableColumn fx:id="communityUsedColumn" text="Used" prefWidth="140.0"/>
-            <TableColumn fx:id="gridUsedColumn" text="Grid" prefWidth="140.0"/>
+            <TableColumn fx:id="communityProducedColumn" text="Produced (kWh)" prefWidth="140.0"/>
+            <TableColumn fx:id="communityUsedColumn" text="Used (kWh)" prefWidth="140.0"/>
+            <TableColumn fx:id="gridUsedColumn" text="Grid (kWh)" prefWidth="140.0"/>
         </columns>
     </TableView>
 

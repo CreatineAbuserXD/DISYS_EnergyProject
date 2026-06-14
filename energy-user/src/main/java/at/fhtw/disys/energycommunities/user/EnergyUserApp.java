@@ -15,23 +15,7 @@ import java.time.LocalDateTime;
 public class EnergyUserApp {
 
     public static void main(String[] args) throws Exception {
-        System.out.println("Energy Users started.");
-
-        Thread user1 = new Thread(() -> runUser("User1"));
-        //Thread user2 = new Thread(() -> runUser("User2"));
-
-        user1.setDaemon(true);
-        //user2.setDaemon(true);
-
-        user1.start();
-        //user2.start();
-
-        user1.join();
-        //user2.join();
-    }
-
-    private static void runUser(String name) {
-        System.out.println("Energy User " + name + " started.");
+        System.out.println("Energy User started.");
 
         ObjectMapper objectMapper = new ObjectMapper();
         objectMapper.registerModule(new JavaTimeModule());
@@ -74,14 +58,14 @@ public class EnergyUserApp {
                 String json = objectMapper.writeValueAsString(message);
                 channel.basicPublish(RabbitMQConfig.EXCHANGE_NAME, RabbitMQConfig.ROUTING_KEY_ENERGY,
                         null, json.getBytes(StandardCharsets.UTF_8));
-                System.out.println("[" + name + "] Sent: " + json);
+                System.out.println("Sent: " + json);
 
                 // erfüllt: "random 1-5 second intervals"
                 int waitMillis = 1000 + (int) (Math.random() * 4000);
                 Thread.sleep(waitMillis);
             }
         } catch (Exception e) {
-            System.out.println("[" + name + "] Error: " + e.getMessage());
+            System.out.println("Error: " + e.getMessage());
         }
     }
 }

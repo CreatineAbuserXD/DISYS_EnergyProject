@@ -50,10 +50,17 @@ public class PercentageServiceApp {
             double used = message.getCommunityUsed();
             double grid = message.getGridUsed();
 
-            // 1. die zwei Prozentwerte berechnen (die ? : verhindern Division durch 0)
-            double communityDepleted = produced > 0 ? Math.min(100.0, used / produced * 100.0) : 0.0;
+            // 1. die zwei Prozentwerte berechnen (die Guards verhindern Division durch 0)
+            double communityDepleted = 0.0;
+            if (produced > 0) {
+                communityDepleted = Math.min(100.0, used / produced * 100.0);
+            }
+
             double total = used + grid;
-            double gridPortion = total > 0 ? grid / total * 100.0 : 0.0;
+            double gridPortion = 0.0;
+            if (total > 0) {
+                gridPortion = grid / total * 100.0;
+            }
 
             try {
                 // 2. Spec: die Tabelle haelt nur die aktuelle Stunde -> alte Stunden vorher loeschen
