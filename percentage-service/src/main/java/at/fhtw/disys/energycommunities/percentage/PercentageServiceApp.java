@@ -34,7 +34,6 @@ public class PercentageServiceApp {
         Connection connection = factory.newConnection();
         Channel channel = connection.createChannel();
 
-        // Exchange + Update-Queue deklarieren - gleiche Parameter wie beim Usage Service!
         channel.exchangeDeclare(RabbitMQConfig.EXCHANGE_NAME, "direct", true);
         channel.queueDeclare(RabbitMQConfig.QUEUE_UPDATE, true, false, false, null);
         channel.queueBind(RabbitMQConfig.QUEUE_UPDATE, RabbitMQConfig.EXCHANGE_NAME, RabbitMQConfig.ROUTING_KEY_UPDATE);

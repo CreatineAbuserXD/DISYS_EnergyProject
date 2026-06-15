@@ -63,8 +63,6 @@ public class EnergyUserApp {
                 int waitMillis = 1000 + (int) (Math.random() * 4000);
                 Thread.sleep(waitMillis);
             }
-        } catch (Exception e) {
-            System.out.println("Error: " + e.getMessage());
         }
     }
 }

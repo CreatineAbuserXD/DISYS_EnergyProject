@@ -35,6 +35,12 @@ public class MainController {
     private DatePicker endDatePicker;
 
     @FXML
+    private ComboBox<Integer> startHourCombo;
+
+    @FXML
+    private ComboBox<Integer> endHourCombo;
+
+    @FXML
     private TableView<UsageBucket> historicalTable;
 
     @FXML
@@ -65,6 +71,13 @@ public class MainController {
 
         setGermanFormat(startDatePicker);
         setGermanFormat(endDatePicker);
+
+        for (int hour = 0; hour <= 23; hour++) {
+            startHourCombo.getItems().add(hour);
+            endHourCombo.getItems().add(hour);
+        }
+        startHourCombo.setValue(0);
+        endHourCombo.setValue(23);
     }
 
     private <T> void setRoundedCellFactory(TableColumn<T, Double> column) {
@@ -140,21 +153,26 @@ public class MainController {
     public void onLoadHistoricalEnergy() {
         LocalDate startDate = startDatePicker.getValue();
         LocalDate endDate = endDatePicker.getValue();
+        Integer startHour = startHourCombo.getValue();
+        Integer endHour = endHourCombo.getValue();
 
-        if (startDate == null || endDate == null) {
-            historicalStatusLabel.setText("Please select a start and end date.");
+        if (startDate == null || endDate == null || startHour == null || endHour == null) {
+            historicalStatusLabel.setText("Please select a start and end date with hour.");
             return;
         }
 
-        if (startDate.isAfter(endDate)) {
-            historicalStatusLabel.setText("Start date must be before end date.");
+        LocalDateTime startTime = startDate.atTime(startHour, 0);
+        LocalDateTime endTime = endDate.atTime(endHour, 0);
+
+        if (startTime.isAfter(endTime)) {
+            historicalStatusLabel.setText("Start must be before end.");
             return;
         }
 
         historicalStatusLabel.setText("Loading historical data...");
 
-        String start = startDate.atStartOfDay().toString();
-        String end = endDate.atTime(23, 59, 59).toString();
+        String start = startTime.toString();
+        String end = endTime.toString();
 
         Task<List<UsageBucket>> task = new Task<>() {
             @Override
