@@ -60,12 +60,7 @@ public class PercentageServiceApp {
             }
 
             try {
-                PreparedStatement clean = db.prepareStatement(
-                        "DELETE FROM percentage_record WHERE bucket_hour <> ?");
-                clean.setObject(1, message.getBucketHour());
-                clean.executeUpdate();
-                clean.close();
-
+                // eine Zeile pro Stunde: anlegen oder bei jeder Update-Nachricht ueberschreiben (Upsert)
                 PreparedStatement upsert = db.prepareStatement(
                         "INSERT INTO percentage_record (bucket_hour, community_depleted, grid_portion) " +
                         "VALUES (?, ?, ?) " +
