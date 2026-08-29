@@ -20,7 +20,7 @@ public class WeatherClient {
 
     public double getCloudCover() {
         try {
-            HttpClient client = HttpClient.newHttpClient();
+            HttpClient client = HttpClient.newHttpClient(); //
 
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(WEATHER_API))

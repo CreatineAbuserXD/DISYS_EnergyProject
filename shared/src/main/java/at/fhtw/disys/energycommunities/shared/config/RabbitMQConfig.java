@@ -16,3 +16,21 @@ public final class RabbitMQConfig {
     private RabbitMQConfig() {
     }
 }
+
+/*
+
+
+
+  Eine zentrale Stelle für RabbitMQ-Verbindungsdaten und Queue-Namen,
+  damit alle Services dieselbe Sprache sprechen.
+
+  In diesem Projekt benutzen sie RabbitMQConfig in fast jedem Service:
+
+  - energy-producer: wohin senden?
+  - energy-user: wohin senden?
+  - usage-service: wo lesen und wohin senden?
+  - percentage-service: wo lesen?
+
+  Das ist alles. Keine Magie. Nur gemeinsame Konstanten.
+
+ */
