@@ -256,3 +256,34 @@ docker compose -f docker/docker-compose.yml up -d
 | Serialization | Jackson 2.16.2 + `jackson-datatype-jsr310` for `LocalDateTime` |
 | Logging | SLF4J + Logback in pom.xml but unused — services use `System.out.println` |
 | UI | JavaFX 21 |
+
+---
+
+## Learning Plan: JDBC & JavaFX (for Philip, started 2026-08-30)
+
+Goal: understand this project well enough to explain the code snippets (exam/presentation context).
+Estimated total time: 4–6h (more like 6–8h if JDBC/JavaFX are completely new), best split over
+2 sessions.
+
+**Status: just started — architecture overview given, no code walkthrough done yet.**
+
+### Plan / order
+1. **JDBC** — walk through `percentage-service/.../PercentageServiceApp.java` line by line:
+   - `DriverManager.getConnection(...)`, `PreparedStatement`, `setObject`/`setDouble`,
+     `executeUpdate`, the `ON CONFLICT ... DO UPDATE` upsert pattern.
+   - Tie it to the known bug: `Connection db` (line 26) is never closed — good example of why
+     try-with-resources matters.
+   - Optionally compare with `usage-service/.../UsageServiceApp.java` (same pattern, has a
+     read-then-write race condition — see "Known Bugs" table above) and with `rest-api`'s
+     Spring `JdbcTemplate` usage (higher-level, no manual Connection/PreparedStatement).
+2. **JavaFX** — walk through `gui` module:
+   - `GuiApplication.java`: `Application`, `FXMLLoader`, `Scene`, `Stage`.
+   - `main-view.fxml` + `MainController.java`: how FXML wires to the controller.
+   - `ApiClient.java`: how the GUI polls the REST API (`java.net.http.HttpClient` + Jackson).
+3. Quick pass over `energy-producer` / `energy-user` / `rest-api` for the full picture (these
+   are simple, low time investment).
+4. Practice explaining out loud / to Claude.
+
+### How to resume
+Next session: just say "weiter mit dem Lernplan" or name the step (e.g. "lass uns mit JDBC an
+PercentageServiceApp weitermachen") — update the Status line above as steps get done.
