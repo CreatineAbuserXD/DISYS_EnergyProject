@@ -90,39 +90,59 @@ ranges that wrap around midnight. `&&` would be impossible (no hour is both ≥2
 
 ### `usage-service`
 The core aggregation service. Consumes `energy-queue`, writes to `usage_bucket`, then
-publishes to `update-queue`.
+publishes to `update-queue`. Business logic (the PRODUCER/USER branching) lives in
+`UsageCalculator.apply(...)`, a pure function with no I/O — extracted out of the
+`DeliverCallback` on 2026-09-06 (see "Lecturer feedback" below).
 
-**Per-message logic:**
+**Per-message flow:**
 ```
-bucketHour = message.datetime truncated to hour
-
-read current (produced, used, grid) for bucketHour from DB (or start at 0)
-
-if PRODUCER:
-    produced += kwh
-
-if USER:
-    available     = produced - used
-    fromCommunity = min(kwh, available)   // consume local energy first
-    fromGrid      = kwh - fromCommunity   // remainder from public grid
-    used          += fromCommunity
-    grid          += fromGrid
-
-UPSERT into usage_bucket ON CONFLICT (bucket_hour)
-publish UpdateMessage(bucketHour, produced, used, grid) → update-queue
+                 RabbitMQ
+                     │
+                     │ EnergyMessage
+                     ▼
+             QUEUE_ENERGY
+                     │
+                     ▼
+              DeliverCallback
+                     │
+                     ▼
+          JSON → EnergyMessage
+                     │
+                     ▼
+          Stunde bestimmen (bucketHour = datetime truncated to hour)
+                     │
+                     ▼
+       aktuellen DB-Wert lesen (SELECT ... WHERE bucket_hour = ?, oder 0 falls neu)
+                     │
+                     ▼
+        UsageCalculator.apply(produced, used, grid, type, kwh)
+                     │
+                     ▼
+          DB UPSERT (usage_bucket, ON CONFLICT bucket_hour)
+                     │
+                     ▼
+       UpdateMessage erzeugen
+                     │
+                     ▼
+      RabbitMQ UPDATE publish (→ update-queue)
+                     │
+                     ▼
+                basicAck()
 ```
+On `SQLException` anywhere in the try block: `basicNack(deliveryTag, false, true)` instead
+(logged, message requeued) — see "Lecturer feedback" below for what changed and why.
 
 **Known issues in this service:**
-- `autoAck=true`: message is acknowledged immediately on delivery. If the DB write fails,
-  the message is silently lost (not requeued).
-- `java.sql.Connection db` is opened outside try-with-resources and never closed.
 - Race condition potential: two concurrent messages could both read the same DB state,
-  calculate independently, and one write overwrites the other's result.
+  calculate independently, and one write overwrites the other's result. Not fixed —
+  would need a DB-level lock or a single-threaded consumer per bucket_hour to fully solve.
 
 ---
 
 ### `percentage-service`
 Consumes `update-queue`, computes two percentage metrics, writes to `percentage_record`.
+Business logic lives in `PercentageCalculator.calculate(...)`, a pure function with no I/O —
+extracted out of the `DeliverCallback` on 2026-09-05 (see "Lecturer feedback" below).
 
 **Calculations:**
 ```
@@ -132,11 +152,9 @@ gridPortion       = grid / (used + grid) * 100         // % of total consumption
 Both guarded against division-by-zero.
 
 **Known issues in this service:**
-- `Connection` and `Channel` are NOT in try-with-resources (resource leak on shutdown).
-- `java.sql.Connection db` is also not closed.
-- `autoAck=true` same as usage-service.
 - ObjectMapper is not configured with `disable(WRITE_DATES_AS_TIMESTAMPS)` — but since
   this service only deserializes (never serializes) datetimes, this has no effect in practice.
+- (Resource leaks and `autoAck=true` were fixed 2026-09-05 — see "Known Bugs" table below.)
 
 ---
 
@@ -231,17 +249,63 @@ docker compose -f docker/docker-compose.yml up -d
 
 ---
 
-## Known Bugs (unfixed as of 2026-08-30)
+## Known Bugs
 
-| # | Location | Line | Issue |
-|---|----------|------|-------|
-| 1 | `PercentageServiceApp.java` | 34–35 | `Connection`/`Channel` not in try-with-resources → resource leak on shutdown |
-| 2 | `UsageServiceApp.java` | 32 | `java.sql.Connection db` never closed |
-| 3 | `PercentageServiceApp.java` | 26 | Same — `db` never closed |
-| 4 | `UsageServiceApp.java` | 113 | `autoAck=true` — message lost if DB write fails |
-| 5 | `PercentageServiceApp.java` | 84 | Same `autoAck=true` |
-| 6 | `EnergyController.java` | 56–57 | `LocalDateTime.parse()` without try-catch → unhandled 500 on bad input |
-| 7 | `EnergyMessage.java` | 3 | Unused import: `@JsonProperty` |
+| # | Location | Line | Issue | Status |
+|---|----------|------|-------|--------|
+| 1 | `PercentageServiceApp.java` | 34–35 (old) | `Connection`/`Channel` not in try-with-resources → resource leak on shutdown | **Fixed 2026-09-05** — wrapped in try-with-resources |
+| 2 | `UsageServiceApp.java` | 32 (old) | `java.sql.Connection db` never closed | **Fixed 2026-09-06** — wrapped in try-with-resources (merged into the existing `connection`/`channel` try) |
+| 3 | `PercentageServiceApp.java` | 26 (old) | Same — `db` never closed | **Fixed 2026-09-05** — wrapped in try-with-resources |
+| 4 | `UsageServiceApp.java` | 113 (old) | `autoAck=true` — message lost if DB write fails | **Fixed 2026-09-06** — manual `basicAck` (after DB write + publish) / `basicNack` (requeues on `SQLException`) |
+| 5 | `PercentageServiceApp.java` | 84 (old) | Same `autoAck=true` | **Fixed 2026-09-05** — manual `basicAck`/`basicNack` (nack requeues on `SQLException`) |
+| 6 | `EnergyController.java` | 56–57 | `LocalDateTime.parse()` without try-catch → unhandled 500 on bad input | unfixed |
+| 7 | `EnergyMessage.java` | 3 | Unused import: `@JsonProperty` | unfixed |
+
+Note: try-with-resources on `db`/`connection`/`channel` only actually runs cleanup on a normal/exceptional
+exit of the block — since both services block forever (`CountDownLatch.await()`, see below), a `Ctrl+C`/
+`SIGTERM` still won't trigger it (no shutdown hook added). Discussed as a known limitation, not fixed
+further — a `Runtime.getRuntime().addShutdownHook(...)` would be the complete fix if ever needed.
+
+Both services also had `Thread.currentThread().join()` at the end (self-join trick to block forever) —
+replaced with `new CountDownLatch(1).await()` in both files for readability. Verified against the
+`amqp-client` 5.20.0 sources (in local `.m2`) that this is technically redundant either way: `ConnectionFactory`
+defaults to `Executors.defaultThreadFactory()`, and `ConsumerWorkService` uses that factory for its consumer
+dispatch thread pool — JDK's default thread factory creates non-daemon threads, so the RabbitMQ client's own
+background thread already keeps the JVM alive once `basicConsume` is called, independent of this line.
+
+## Lecturer feedback (2026-09-05) — code organization
+
+Comment on the project: DB/REST code mixed in `EnergyController` (SQL + RowMapper directly in the
+`@RestController`, no repository/service layer); RabbitMQ setup mixed with business logic in
+`EnergyProducerApp`/`EnergyUserApp`; `WeatherClient` uses `objectMapper.readTree()` → `JsonNode` instead
+of a proper DTO (inconsistent with the rest of the project, which always uses `readValue(json, X.class)`);
+all logic (RabbitMQ, DB, business calc) in one file for `usage-service`/`percentage-service`. Plus a
+separate, unrelated point: deduction for insufficient explanation during presentation.
+
+**Remediation done (2026-09-05), low-risk subset given a same-week deadline:**
+- `PercentageCalculator.java` (new) — pure `calculate(produced, used, grid) -> Result(communityDepleted, gridPortion)`,
+  extracted out of `PercentageServiceApp`'s `DeliverCallback`. No behavior change, callback still calls it inline.
+- `UsageCalculator.java` (new) — pure `apply(produced, used, grid, type, kwh) -> Result(produced, used, grid)`,
+  extracted out of `UsageServiceApp`'s `DeliverCallback` the same way.
+
+**Not done (explicitly deferred, higher risk/effort vs. deadline):**
+- `EnergyController` → Service/Repository layering.
+- `WeatherClient` → proper DTO instead of `JsonNode`.
+- `EnergyProducerApp`/`EnergyUserApp` → extract kWh-calculation into their own pure classes (same pattern
+  as above, just not done yet — quick win if there's time).
+- The DB-read part of `UsageServiceApp` (the `SELECT` + `ResultSet` mapping) was deliberately left as I/O
+  in the app, not pulled into a repository — that would be the next, bigger step (full repository pattern).
+
+**Further candidates (not started), ordered by effort/risk:**
+1. `WeatherClient` (energy-producer) → replace `objectMapper.readTree(...)` / `JsonNode` navigation with a
+   proper DTO (e.g. `record WeatherResponse(Current current) { record Current(@JsonProperty("cloud_cover_low") double cloudCoverLow) {} }`).
+   Smallest, most isolated fix — directly addresses the JsonNode-instead-of-DTO comment.
+2. Extract the kWh-calculation out of `EnergyProducerApp` (sunFactor/jitter formula) and `EnergyUserApp`
+   (hour-of-day branching) into their own pure calculator classes — same pattern as `PercentageCalculator`/
+   `UsageCalculator` above.
+3. `EnergyController` (rest-api) → introduce a Service/Repository layer instead of SQL + RowMapper directly
+   in the `@RestController`. Biggest, riskiest change of the three — was explicitly deprioritized given the
+   2026-09-06 deadline.
 
 ---
 
@@ -265,7 +329,12 @@ Goal: understand this project well enough to explain the code snippets (exam/pre
 Estimated total time: 4–6h (more like 6–8h if JDBC/JavaFX are completely new), best split over
 2 sessions.
 
-**Status: just started — architecture overview given, no code walkthrough done yet.**
+**Status (2026-09-05): step 1 (JDBC via `PercentageServiceApp.java`) done — full line-by-line
+walkthrough incl. RabbitMQ connection/channel/exchange/queue/binding, `DeliverCallback`/`basicConsume`,
+consumerTag, and Producer/Consumer roles across the pipeline. Bugs #1/#3/#5 fixed in that file as a
+hands-on exercise (try-with-resources + manual ack/nack) — see "Known Bugs" table. Next: step 2, JavaFX
+via the `gui` module (or, if preferred, first do the equivalent JDBC walkthrough of
+`UsageServiceApp.java`, which was used for comparison but not fixed).**
 
 ### Plan / order
 1. **JDBC** — walk through `percentage-service/.../PercentageServiceApp.java` line by line:

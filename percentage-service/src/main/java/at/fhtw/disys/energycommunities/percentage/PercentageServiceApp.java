@@ -13,78 +13,80 @@ import java.nio.charset.StandardCharsets;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
+import java.util.concurrent.CountDownLatch;
 
 public class PercentageServiceApp {
 
     public static void main(String[] args) throws Exception {
         System.out.println("Percentage Service started.");
 
-        ObjectMapper objectMapper = new ObjectMapper();
-        objectMapper.registerModule(new JavaTimeModule());   // damit das datetime gelesen werden kann
-
-        String dbUrl = "jdbc:postgresql://localhost:5432/energycommunities"; // Zugangsdaten siehe docker-compose
-        java.sql.Connection db = DriverManager.getConnection(dbUrl, "disysuser", "disyspw");
-        System.out.println("Connected to database.");
-
         // Verbindung zu RabbitMQ herstellen (siehe shared --> RabbitMQConfig)
         ConnectionFactory factory = new ConnectionFactory();
         factory.setHost(RabbitMQConfig.HOST);
         factory.setPort(RabbitMQConfig.PORT);
 
-        Connection connection = factory.newConnection();
-        Channel channel = connection.createChannel();
+        ObjectMapper objectMapper = new ObjectMapper();  //JSON<-->Object Sereialisierung/Deserial. (wie codeable)
+        objectMapper.registerModule(new JavaTimeModule());   // damit das datetime gelesen werden kann
 
-        channel.exchangeDeclare(RabbitMQConfig.EXCHANGE_NAME, "direct", true);
-        channel.queueDeclare(RabbitMQConfig.QUEUE_UPDATE, true, false, false, null);
-        channel.queueBind(RabbitMQConfig.QUEUE_UPDATE, RabbitMQConfig.EXCHANGE_NAME, RabbitMQConfig.ROUTING_KEY_UPDATE);
+        String dbUrl = "jdbc:postgresql://localhost:5432/energycommunities"; // Zugangsdaten siehe docker-compose
 
-        DeliverCallback deliverCallback = (consumerTag, delivery) -> {
-            String json = new String(delivery.getBody(), StandardCharsets.UTF_8);
-            UpdateMessage message = objectMapper.readValue(json, UpdateMessage.class);
+        // JDBC + RabbitMQ - try-with-resources: alle drei werden beim Verlassen des Blocks automatisch geschlossen
+        try (java.sql.Connection db = DriverManager.getConnection(dbUrl, "disysuser", "disyspw");
+             Connection connection = factory.newConnection(); // öffnet die TCP-Con über RabbitMQ
+             // ein Channel ist virtuell innerhalb der TCP Connection (mehrere Channels x Connection sind erlaubt)
+             Channel channel = connection.createChannel()) {
 
-            double produced = message.getCommunityProduced();
-            double used = message.getCommunityUsed();
-            double grid = message.getGridUsed();
+            System.out.println("Connected to database.");
 
-            // die zwei Prozentwerte berechnen (die Guards verhindern Division durch 0)
-            double communityDepleted = 0.0;
-            if (produced > 0) {
-                communityDepleted = Math.min(100.0, used / produced * 100.0);
-            }
+            channel.exchangeDeclare(RabbitMQConfig.EXCHANGE_NAME, "direct", true); //Routing an Q's (key:direct routing verhalten), true-> bleibt bestehen nach MQ-Restart
+            channel.queueDeclare(RabbitMQConfig.QUEUE_UPDATE, true, false, false, null);
+            channel.queueBind(RabbitMQConfig.QUEUE_UPDATE, RabbitMQConfig.EXCHANGE_NAME, RabbitMQConfig.ROUTING_KEY_UPDATE);
 
-            double total = used + grid;
-            double gridPortion = 0.0;
-            if (total > 0) {
-                gridPortion = grid / total * 100.0;
-            }
+            DeliverCallback deliverCallback = (consumerTag, delivery) -> {
+                String json = new String(delivery.getBody(), StandardCharsets.UTF_8);
+                UpdateMessage message = objectMapper.readValue(json, UpdateMessage.class);
+                long deliveryTag = delivery.getEnvelope().getDeliveryTag();
 
-            try {
-                // eine Zeile pro Stunde: anlegen oder bei jeder Update-Nachricht ueberschreiben (Upsert)
-                PreparedStatement upsert = db.prepareStatement(
-                        "INSERT INTO percentage_record (bucket_hour, community_depleted, grid_portion) " +
-                        "VALUES (?, ?, ?) " +
-                        "ON CONFLICT (bucket_hour) DO UPDATE SET " +
-                        "community_depleted = EXCLUDED.community_depleted, " +
-                        "grid_portion = EXCLUDED.grid_portion, " +
-                        "updated_at = NOW()");
-                upsert.setObject(1, message.getBucketHour());
-                upsert.setDouble(2, communityDepleted);
-                upsert.setDouble(3, gridPortion);
-                upsert.executeUpdate();
-                upsert.close();
+                double produced = message.getCommunityProduced();
+                double used = message.getCommunityUsed();
+                double grid = message.getGridUsed();
 
-                System.out.println("Percentages for " + message.getBucketHour()
-                        + " -> community_depleted=" + communityDepleted + "%, grid_portion=" + gridPortion + "%");
-            } catch (SQLException e) {
-                System.out.println("DB-Fehler: " + e.getMessage());
-            }
-        };
+                PercentageCalculator.Result percentages = PercentageCalculator.calculate(produced, used, grid);
+                double communityDepleted = percentages.communityDepleted();
+                double gridPortion = percentages.gridPortion();
 
-        // Consumer starten. autoAck=true: eine Nachricht gilt sofort als erledigt, sobald abgeholt
-        channel.basicConsume(RabbitMQConfig.QUEUE_UPDATE, true, deliverCallback, consumerTag -> { });
+                try {
+                    // eine Zeile pro Stunde: anlegen oder bei jeder Update-Nachricht ueberschreiben (Upsert)
+                    PreparedStatement upsert = db.prepareStatement(
+                            "INSERT INTO percentage_record (bucket_hour, community_depleted, grid_portion) " +
+                            "VALUES (?, ?, ?) " +
+                            "ON CONFLICT (bucket_hour) DO UPDATE SET " +
+                            "community_depleted = EXCLUDED.community_depleted, " +
+                            "grid_portion = EXCLUDED.grid_portion, " +
+                            "updated_at = NOW()");
+                    upsert.setObject(1, message.getBucketHour());
+                    upsert.setDouble(2, communityDepleted);
+                    upsert.setDouble(3, gridPortion);
+                    upsert.executeUpdate();
+                    upsert.close();
 
-        System.out.println("Waiting for update messages...");
-        // Service läuft einfach weiter, auch wenn keine Messages mehr in der Queue sind
-        Thread.currentThread().join();
+                    channel.basicAck(deliveryTag, false);
+
+                    System.out.println("Percentages for " + message.getBucketHour()
+                            + " -> community_depleted=" + communityDepleted + "%, grid_portion=" + gridPortion + "%");
+                } catch (SQLException e) {
+                    System.out.println("DB-Fehler: " + e.getMessage());
+                    // Nachricht zurueck in die Queue, statt sie bei einem DB-Fehler zu verlieren
+                    channel.basicNack(deliveryTag, false, true);
+                }
+            };
+
+            // Consumer starten. autoAck=false: Nachricht wird erst nach erfolgreichem DB-Write bestaetigt
+            channel.basicConsume(RabbitMQConfig.QUEUE_UPDATE, false, deliverCallback, ct -> { });
+
+            System.out.println("Waiting for update messages...");
+            // Service läuft einfach weiter, auch wenn keine Messages mehr in der Queue sind
+            new CountDownLatch(1).await();
+        }
     }
 }

@@ -18,27 +18,31 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
+import java.util.concurrent.CountDownLatch;
 
 public class UsageServiceApp {
 
     public static void main(String[] args) throws Exception {
         System.out.println("Usage Service started.");
 
-        ObjectMapper objectMapper = new ObjectMapper();
-        objectMapper.registerModule(new JavaTimeModule()); // damit das datetime gelesen werden kann
-        objectMapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
-
-        String dbUrl = "jdbc:postgresql://localhost:5432/energycommunities"; // Zugangsdaten siehe docker-compose
-        java.sql.Connection db = DriverManager.getConnection(dbUrl, "disysuser", "disyspw");
-        System.out.println("Connected to database.");
-
         // Verbindung zu RabbitMQ herstellen (siehe shared → RabbitMQConfig)
-        ConnectionFactory factory = new ConnectionFactory();
+        ConnectionFactory factory = new ConnectionFactory(); //
         factory.setHost(RabbitMQConfig.HOST);
         factory.setPort(RabbitMQConfig.PORT);
 
-        try (Connection connection = factory.newConnection();
+        ObjectMapper objectMapper = new ObjectMapper(); //JACKSON für JSON<->JAVA Objekt wie Codeable
+        objectMapper.registerModule(new JavaTimeModule()); // damit das datetime gelesen werden kann
+        objectMapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+
+            //JDBC part, weil ich hier ja mit postgresql arbeite (könnte man ja austauschen)
+        String dbUrl = "jdbc:postgresql://localhost:5432/energycommunities"; // Zugangsdaten siehe docker-compose
+
+        // JDBC + RabbitMQ - try-with-resources: alle drei werden beim Verlassen des Blocks automatisch geschlossen
+        try (java.sql.Connection db = DriverManager.getConnection(dbUrl, "disysuser", "disyspw");
+             Connection connection = factory.newConnection();
              Channel channel = connection.createChannel()) {
+
+            System.out.println("Connected to database.");
 
             channel.exchangeDeclare(RabbitMQConfig.EXCHANGE_NAME, "direct", true);
             channel.queueDeclare(RabbitMQConfig.QUEUE_ENERGY, true, false, false, null);
@@ -50,6 +54,7 @@ public class UsageServiceApp {
             DeliverCallback deliverCallback = (consumerTag, delivery) -> {
                 String json = new String(delivery.getBody(), StandardCharsets.UTF_8);
                 EnergyMessage message = objectMapper.readValue(json, EnergyMessage.class);
+                long deliveryTag = delivery.getEnvelope().getDeliveryTag();
 
                 // auf volle Stunde abrunden
                 LocalDateTime bucketHour = message.getDatetime().truncatedTo(ChronoUnit.HOURS);
@@ -72,15 +77,10 @@ public class UsageServiceApp {
                     rs.close();
                     select.close();
 
-                    if (message.getType().equals("PRODUCER")) {
-                        produced += message.getKwh();
-                    } else { // USER
-                        double available = produced - used;                            // noch verfügbare Gemeinschaftsenergie
-                        double fromCommunity = Math.min(message.getKwh(), available);   // zuerst aus der Gemeinschaft
-                        double fromGrid = message.getKwh() - fromCommunity;             // Rest aus dem Netz
-                        used += fromCommunity;
-                        grid += fromGrid;
-                    }
+                    UsageCalculator.Result updated = UsageCalculator.apply(produced, used, grid, message.getType(), message.getKwh());
+                    produced = updated.produced();
+                    used = updated.used();
+                    grid = updated.grid();
 
                     // Stunde anlegen oder aktualisieren (mit nativem upsert)
                     PreparedStatement upsert = db.prepareStatement(
@@ -103,19 +103,23 @@ public class UsageServiceApp {
                     channel.basicPublish(RabbitMQConfig.EXCHANGE_NAME, RabbitMQConfig.ROUTING_KEY_UPDATE,
                             null, updateJson.getBytes(StandardCharsets.UTF_8));
 
+                    channel.basicAck(deliveryTag, false);
+
                     System.out.println("Updated " + bucketHour + " -> produced=" + produced + ", used=" + used + ", grid=" + grid);
                 } catch (SQLException e) {
                     System.out.println("DB-Fehler: " + e.getMessage());
+                    // Nachricht zurueck in die Queue, statt sie bei einem DB-Fehler zu verlieren
+                    channel.basicNack(deliveryTag, false, true);
                 }
             };
 
-            // Consumer starten, autoAck=true: eine Nachricht gilt sofort als erledigt, sobald abgeholt
-            channel.basicConsume(RabbitMQConfig.QUEUE_ENERGY, true, deliverCallback, consumerTag -> {
+            // Consumer starten. autoAck=false: Nachricht wird erst nach erfolgreichem DB-Write + Publish bestaetigt
+            channel.basicConsume(RabbitMQConfig.QUEUE_ENERGY, false, deliverCallback, consumerTag -> {
             });
 
             System.out.println("Waiting for messages...");
             // Service läuft einfach weiter, auch wenn keine Messages mehr in der Queue sind
-            Thread.currentThread().join();
+            new CountDownLatch(1).await();
         }
     }
 }
