@@ -260,6 +260,7 @@ docker compose -f docker/docker-compose.yml up -d
 | 5 | `PercentageServiceApp.java` | 84 (old) | Same `autoAck=true` | **Fixed 2026-09-05** — manual `basicAck`/`basicNack` (nack requeues on `SQLException`) |
 | 6 | `EnergyController.java` | 56–57 | `LocalDateTime.parse()` without try-catch → unhandled 500 on bad input | unfixed |
 | 7 | `EnergyMessage.java` | 3 | Unused import: `@JsonProperty` | unfixed |
+| 8 | `MainController.java` | (both `setOnFailed` handlers) | `Thread.currentThread().interrupt()` called on the JavaFX Application Thread, not the background thread that threw `InterruptedException` — no effect, wrong thread | **Fixed 2026-09-06** by Philip — removed from both handlers |
 
 Note: try-with-resources on `db`/`connection`/`channel` only actually runs cleanup on a normal/exceptional
 exit of the block — since both services block forever (`CountDownLatch.await()`, see below), a `Ctrl+C`/
@@ -347,23 +348,39 @@ via manual `javac` — no `mvn` available in this environment).
 understood conceptually — they reuse the identical RabbitMQ setup pattern, just as Producer-only
 (`basicPublish` in a `while(true)` loop instead of `DeliverCallback`/`basicConsume`).
 
-**Step 2 (JavaFX) started 2026-09-06, brief intro only:**
+**Step 2 (JavaFX) — fully done 2026-09-06:**
 - `GuiApplication.java`: `Application`/`launch()`/`start(Stage)` lifecycle (JavaFX calls `start()`,
   never called manually — same idea as `DeliverCallback` being framework-invoked), `Stage` (=window)
   vs `Scene` (=content, fixed size, one active per Stage at a time), `FXMLLoader` (builds the scene
-  graph from FXML instead of manual `new Button()` etc.).
-- `main-view.fxml`: `fx:controller` (which Java class is the controller), `fx:id` (FXMLLoader injects
-  the built UI node into a same-named `@FXML` field on the controller via reflection), `onAction="#method"`
-  (wires a button click to a controller method, also by name via reflection).
-- **Not yet done:** `MainController.java` (the actual logic behind the buttons/table) and
-  `ApiClient.java` (`HttpClient` + Jackson, how the GUI polls the REST API) — planned as tomorrow's
-  starting point.
+  graph from FXML instead of manual `new Button()` etc.). `main()`/`launch(args)` is just the bootstrap
+  (creates the `Application` instance via reflection, hands off to the JavaFX thread) — no app logic there.
+- `main-view.fxml` ↔ `MainController.java`: `fx:controller` (which Java class is the controller),
+  `fx:id` (FXMLLoader injects the built UI node into a same-named `@FXML` field on the controller via
+  reflection, even though the field is `private`), `onAction="#method"` (wires a button click to a
+  controller method, also by name via reflection). `initialize()` runs automatically once all `@FXML`
+  fields are injected — used here for table cell factories (`PropertyValueFactory` binds column to
+  model getter by name), date/number formatting, combo box defaults.
+- `MainController.java` — the fachlich important part: `onSeeCurrentEnergy`/`onLoadHistoricalEnergy`
+  both wrap the blocking `ApiClient` call in a `Task<T>` run on a separate daemon `Thread`, specifically
+  so the blocking HTTP call doesn't freeze the JavaFX Application Thread. `Task`'s `setOnSucceeded`/
+  `setOnFailed` callbacks are automatically marshalled back onto the JavaFX Application Thread, which is
+  why UI elements (labels, table) can be set directly inside them without an explicit `Platform.runLater()`.
+- `ApiClient.java`: plain `java.net.http.HttpClient` (blocking) + Jackson (`ObjectMapper` +
+  `JavaTimeModule` for `LocalDateTime`), one method per REST endpoint, throws `IOException` on non-200.
+- **Bug found and fixed by Philip during this pass (not in the original Known Bugs table):** both
+  `setOnFailed` handlers in `MainController.java` called `Thread.currentThread().interrupt()` when the
+  task failed with `InterruptedException` — but `setOnFailed` runs on the JavaFX Application Thread, not
+  the background thread that actually threw the `InterruptedException`. Restoring the interrupt flag on
+  the wrong (long-lived UI) thread does nothing useful and doesn't correspond to the thread that was
+  actually interrupted (which has already terminated by that point). Removed from both handlers
+  (`onSeeCurrentEnergy` and `onLoadHistoricalEnergy`) — only `showError(...)`/status label update remains.
 
-**Next session: resume with `MainController.java` + `ApiClient.java`**, then a full repetition/review
-pass across everything (Philip's own plan: "wenn ich morgen wiederhole verstehe ich die services zu
-100%") ahead of an exam/presentation context. `WeatherClient` DTO refactor and the
-`EnergyProducerApp`/`EnergyUserApp` calculator extraction remain as optional TODOs (see "Further
-candidates" above) — not required, pick up only if there's time.
+**Learning plan status: complete (2026-09-06).** Both JDBC and JavaFX steps walked through, plus a full
+Producer/Consumer picture across the pipeline. `energy-producer`/`energy-user`/`rest-api` remain at
+"conceptually understood" depth (simple modules, same patterns). `WeatherClient` DTO refactor and the
+`EnergyProducerApp`/`EnergyUserApp` calculator extraction remain optional TODOs (see "Further candidates"
+above) — not required for the exam/presentation, pick up only if there's time. If a repetition pass is
+wanted before the exam, this file plus the two "Lecturer feedback" walkthroughs are the full picture.
 
 ### Plan / order
 1. **JDBC** — walk through `percentage-service/.../PercentageServiceApp.java` line by line:
