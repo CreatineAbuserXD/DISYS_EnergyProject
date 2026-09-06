@@ -90,39 +90,59 @@ ranges that wrap around midnight. `&&` would be impossible (no hour is both ≥2
 
 ### `usage-service`
 The core aggregation service. Consumes `energy-queue`, writes to `usage_bucket`, then
-publishes to `update-queue`.
+publishes to `update-queue`. Business logic (the PRODUCER/USER branching) lives in
+`UsageCalculator.apply(...)`, a pure function with no I/O — extracted out of the
+`DeliverCallback` on 2026-09-06 (see "Lecturer feedback" below).
 
-**Per-message logic:**
+**Per-message flow:**
 ```
-bucketHour = message.datetime truncated to hour
-
-read current (produced, used, grid) for bucketHour from DB (or start at 0)
-
-if PRODUCER:
-    produced += kwh
-
-if USER:
-    available     = produced - used
-    fromCommunity = min(kwh, available)   // consume local energy first
-    fromGrid      = kwh - fromCommunity   // remainder from public grid
-    used          += fromCommunity
-    grid          += fromGrid
-
-UPSERT into usage_bucket ON CONFLICT (bucket_hour)
-publish UpdateMessage(bucketHour, produced, used, grid) → update-queue
+                 RabbitMQ
+                     │
+                     │ EnergyMessage
+                     ▼
+             QUEUE_ENERGY
+                     │
+                     ▼
+              DeliverCallback
+                     │
+                     ▼
+          JSON → EnergyMessage
+                     │
+                     ▼
+          Stunde bestimmen (bucketHour = datetime truncated to hour)
+                     │
+                     ▼
+       aktuellen DB-Wert lesen (SELECT ... WHERE bucket_hour = ?, oder 0 falls neu)
+                     │
+                     ▼
+        UsageCalculator.apply(produced, used, grid, type, kwh)
+                     │
+                     ▼
+          DB UPSERT (usage_bucket, ON CONFLICT bucket_hour)
+                     │
+                     ▼
+       UpdateMessage erzeugen
+                     │
+                     ▼
+      RabbitMQ UPDATE publish (→ update-queue)
+                     │
+                     ▼
+                basicAck()
 ```
+On `SQLException` anywhere in the try block: `basicNack(deliveryTag, false, true)` instead
+(logged, message requeued) — see "Lecturer feedback" below for what changed and why.
 
 **Known issues in this service:**
-- `autoAck=true`: message is acknowledged immediately on delivery. If the DB write fails,
-  the message is silently lost (not requeued).
-- `java.sql.Connection db` is opened outside try-with-resources and never closed.
 - Race condition potential: two concurrent messages could both read the same DB state,
-  calculate independently, and one write overwrites the other's result.
+  calculate independently, and one write overwrites the other's result. Not fixed —
+  would need a DB-level lock or a single-threaded consumer per bucket_hour to fully solve.
 
 ---
 
 ### `percentage-service`
 Consumes `update-queue`, computes two percentage metrics, writes to `percentage_record`.
+Business logic lives in `PercentageCalculator.calculate(...)`, a pure function with no I/O —
+extracted out of the `DeliverCallback` on 2026-09-05 (see "Lecturer feedback" below).
 
 **Calculations:**
 ```
@@ -132,11 +152,9 @@ gridPortion       = grid / (used + grid) * 100         // % of total consumption
 Both guarded against division-by-zero.
 
 **Known issues in this service:**
-- `Connection` and `Channel` are NOT in try-with-resources (resource leak on shutdown).
-- `java.sql.Connection db` is also not closed.
-- `autoAck=true` same as usage-service.
 - ObjectMapper is not configured with `disable(WRITE_DATES_AS_TIMESTAMPS)` — but since
   this service only deserializes (never serializes) datetimes, this has no effect in practice.
+- (Resource leaks and `autoAck=true` were fixed 2026-09-05 — see "Known Bugs" table below.)
 
 ---
 
@@ -231,17 +249,68 @@ docker compose -f docker/docker-compose.yml up -d
 
 ---
 
-## Known Bugs (unfixed as of 2026-08-30)
+## Known Bugs
 
-| # | Location | Line | Issue |
-|---|----------|------|-------|
-| 1 | `PercentageServiceApp.java` | 34–35 | `Connection`/`Channel` not in try-with-resources → resource leak on shutdown |
-| 2 | `UsageServiceApp.java` | 32 | `java.sql.Connection db` never closed |
-| 3 | `PercentageServiceApp.java` | 26 | Same — `db` never closed |
-| 4 | `UsageServiceApp.java` | 113 | `autoAck=true` — message lost if DB write fails |
-| 5 | `PercentageServiceApp.java` | 84 | Same `autoAck=true` |
-| 6 | `EnergyController.java` | 56–57 | `LocalDateTime.parse()` without try-catch → unhandled 500 on bad input |
-| 7 | `EnergyMessage.java` | 3 | Unused import: `@JsonProperty` |
+| # | Location | Line | Issue | Status |
+|---|----------|------|-------|--------|
+| 1 | `PercentageServiceApp.java` | 34–35 (old) | `Connection`/`Channel` not in try-with-resources → resource leak on shutdown | **Fixed 2026-09-05** — wrapped in try-with-resources |
+| 2 | `UsageServiceApp.java` | 32 (old) | `java.sql.Connection db` never closed | **Fixed 2026-09-06** — wrapped in try-with-resources (merged into the existing `connection`/`channel` try) |
+| 3 | `PercentageServiceApp.java` | 26 (old) | Same — `db` never closed | **Fixed 2026-09-05** — wrapped in try-with-resources |
+| 4 | `UsageServiceApp.java` | 113 (old) | `autoAck=true` — message lost if DB write fails | **Fixed 2026-09-06** — manual `basicAck` (after DB write + publish) / `basicNack` (requeues on `SQLException`) |
+| 5 | `PercentageServiceApp.java` | 84 (old) | Same `autoAck=true` | **Fixed 2026-09-05** — manual `basicAck`/`basicNack` (nack requeues on `SQLException`) |
+| 6 | `EnergyController.java` | 56–57 (old) | `LocalDateTime.parse()` without try-catch → unhandled 500 on bad input | **Fixed 2026-09-06** — `getHistorical` now returns `ResponseEntity<?>`, catches `DateTimeParseException`, returns 400 Bad Request with a message instead of an unhandled 500 |
+| 7 | `EnergyMessage.java` | 3 | Unused import: `@JsonProperty` | unfixed |
+| 8 | `MainController.java` | (both `setOnFailed` handlers) | `Thread.currentThread().interrupt()` called on the JavaFX Application Thread, not the background thread that threw `InterruptedException` — no effect, wrong thread | **Fixed 2026-09-06** by Philip — removed from both handlers |
+
+Note: try-with-resources on `db`/`connection`/`channel` only actually runs cleanup on a normal/exceptional
+exit of the block — since both services block forever (`CountDownLatch.await()`, see below), a `Ctrl+C`/
+`SIGTERM` still won't trigger it (no shutdown hook added). Discussed as a known limitation, not fixed
+further — a `Runtime.getRuntime().addShutdownHook(...)` would be the complete fix if ever needed.
+
+Both services also had `Thread.currentThread().join()` at the end (self-join trick to block forever) —
+replaced with `new CountDownLatch(1).await()` in both files for readability. Verified against the
+`amqp-client` 5.20.0 sources (in local `.m2`) that this is technically redundant either way: `ConnectionFactory`
+defaults to `Executors.defaultThreadFactory()`, and `ConsumerWorkService` uses that factory for its consumer
+dispatch thread pool — JDK's default thread factory creates non-daemon threads, so the RabbitMQ client's own
+background thread already keeps the JVM alive once `basicConsume` is called, independent of this line.
+
+## Lecturer feedback (2026-09-05) — code organization
+
+Comment on the project: DB/REST code mixed in `EnergyController` (SQL + RowMapper directly in the
+`@RestController`, no repository/service layer); RabbitMQ setup mixed with business logic in
+`EnergyProducerApp`/`EnergyUserApp`; `WeatherClient` uses `objectMapper.readTree()` → `JsonNode` instead
+of a proper DTO (inconsistent with the rest of the project, which always uses `readValue(json, X.class)`);
+all logic (RabbitMQ, DB, business calc) in one file for `usage-service`/`percentage-service`. Plus a
+separate, unrelated point: deduction for insufficient explanation during presentation.
+
+**Remediation done (2026-09-05), low-risk subset given a same-week deadline:**
+- `PercentageCalculator.java` (new) — pure `calculate(produced, used, grid) -> Result(communityDepleted, gridPortion)`,
+  extracted out of `PercentageServiceApp`'s `DeliverCallback`. No behavior change, callback still calls it inline.
+- `UsageCalculator.java` (new) — pure `apply(produced, used, grid, type, kwh) -> Result(produced, used, grid)`,
+  extracted out of `UsageServiceApp`'s `DeliverCallback` the same way.
+
+**Not done (explicitly deferred, higher risk/effort vs. deadline):**
+- `EnergyController` → Service/Repository layering.
+- `WeatherClient` → proper DTO instead of `JsonNode`.
+- `EnergyProducerApp`/`EnergyUserApp` → extract kWh-calculation into their own pure classes (same pattern
+  as above, just not done yet — quick win if there's time).
+- The DB-read part of `UsageServiceApp` (the `SELECT` + `ResultSet` mapping) was deliberately left as I/O
+  in the app, not pulled into a repository — that would be the next, bigger step (full repository pattern).
+
+**Further candidates (not started), ordered by effort/risk:**
+1. **TODO / nice-to-have, deferred 2026-09-06 for time reasons:** `WeatherClient` (energy-producer) →
+   replace `objectMapper.readTree(...)` / `JsonNode` navigation with a proper DTO (e.g.
+   `record WeatherResponse(Current current) { record Current(@JsonProperty("cloud_cover_low") double cloudCoverLow) {} }`).
+   Smallest, most isolated fix — directly addresses the JsonNode-instead-of-DTO comment. Why it matters:
+   `.path(...).asDouble()` on a missing/typo'd key silently returns `0.0` instead of failing loudly —
+   a DTO would throw instead. Not urgent (no bug today), just the last inconsistency vs. the rest of
+   the project's Jackson usage.
+2. Extract the kWh-calculation out of `EnergyProducerApp` (sunFactor/jitter formula) and `EnergyUserApp`
+   (hour-of-day branching) into their own pure calculator classes — same pattern as `PercentageCalculator`/
+   `UsageCalculator` above.
+3. `EnergyController` (rest-api) → introduce a Service/Repository layer instead of SQL + RowMapper directly
+   in the `@RestController`. Biggest, riskiest change of the three — was explicitly deprioritized given the
+   2026-09-06 deadline.
 
 ---
 
@@ -265,7 +334,67 @@ Goal: understand this project well enough to explain the code snippets (exam/pre
 Estimated total time: 4–6h (more like 6–8h if JDBC/JavaFX are completely new), best split over
 2 sessions.
 
-**Status: just started — architecture overview given, no code walkthrough done yet.**
+**Status (2026-09-06, evening): step 1 (JDBC) fully done for BOTH `PercentageServiceApp.java` and
+`UsageServiceApp.java` — line-by-line walkthrough incl. RabbitMQ connection/channel/exchange/queue/
+binding, `DeliverCallback`/`basicConsume`, consumerTag, and Producer/Consumer roles across the pipeline
+(`UsageServiceApp` is the only class that's both Consumer of `energy-queue` AND Producer to
+`update-queue`). Both files fully remediated (see "Known Bugs" table + "Lecturer feedback" section) —
+try-with-resources, manual ack/nack, `PercentageCalculator`/`UsageCalculator` extraction,
+`CountDownLatch` instead of `Thread.currentThread().join()` (verified redundant either way via
+`amqp-client` sources — RabbitMQ's own consumer thread is non-daemon). Both compile clean (verified
+via manual `javac` — no `mvn` available in this environment).
+
+`energy-producer`/`energy-user` were NOT individually walked through line-by-line, but are considered
+understood conceptually — they reuse the identical RabbitMQ setup pattern, just as Producer-only
+(`basicPublish` in a `while(true)` loop instead of `DeliverCallback`/`basicConsume`).
+
+**Step 2 (JavaFX) — fully done 2026-09-06:**
+- `GuiApplication.java`: `Application`/`launch()`/`start(Stage)` lifecycle (JavaFX calls `start()`,
+  never called manually — same idea as `DeliverCallback` being framework-invoked), `Stage` (=window)
+  vs `Scene` (=content, fixed size, one active per Stage at a time), `FXMLLoader` (builds the scene
+  graph from FXML instead of manual `new Button()` etc.). `main()`/`launch(args)` is just the bootstrap
+  (creates the `Application` instance via reflection, hands off to the JavaFX thread) — no app logic there.
+- `main-view.fxml` ↔ `MainController.java`: `fx:controller` (which Java class is the controller),
+  `fx:id` (FXMLLoader injects the built UI node into a same-named `@FXML` field on the controller via
+  reflection, even though the field is `private`), `onAction="#method"` (wires a button click to a
+  controller method, also by name via reflection). `initialize()` runs automatically once all `@FXML`
+  fields are injected — used here for table cell factories (`PropertyValueFactory` binds column to
+  model getter by name), date/number formatting, combo box defaults.
+- `MainController.java` — the fachlich important part: `onSeeCurrentEnergy`/`onLoadHistoricalEnergy`
+  both wrap the blocking `ApiClient` call in a `Task<T>` run on a separate daemon `Thread`, specifically
+  so the blocking HTTP call doesn't freeze the JavaFX Application Thread. `Task`'s `setOnSucceeded`/
+  `setOnFailed` callbacks are automatically marshalled back onto the JavaFX Application Thread, which is
+  why UI elements (labels, table) can be set directly inside them without an explicit `Platform.runLater()`.
+- `ApiClient.java`: plain `java.net.http.HttpClient` (blocking) + Jackson (`ObjectMapper` +
+  `JavaTimeModule` for `LocalDateTime`), one method per REST endpoint, throws `IOException` on non-200.
+- **Bug found and fixed by Philip during this pass (not in the original Known Bugs table):** both
+  `setOnFailed` handlers in `MainController.java` called `Thread.currentThread().interrupt()` when the
+  task failed with `InterruptedException` — but `setOnFailed` runs on the JavaFX Application Thread, not
+  the background thread that actually threw the `InterruptedException`. Restoring the interrupt flag on
+  the wrong (long-lived UI) thread does nothing useful and doesn't correspond to the thread that was
+  actually interrupted (which has already terminated by that point). Removed from both handlers
+  (`onSeeCurrentEnergy` and `onLoadHistoricalEnergy`) — only `showError(...)`/status label update remains.
+
+**Learning plan status: core done (2026-09-06), but Philip flagged it feels too thin — doing a self-check
+pass before the exam rather than trusting "done".** Solid depth (line-by-line, can explain bugs/tradeoffs):
+JDBC (`UsageServiceApp`/`PercentageServiceApp`), JavaFX (`GuiApplication`/`MainController`/`ApiClient`/FXML),
+REST-API basic pattern (`JdbcTemplate`, RowMapper, annotations).
+
+**Still shallow — worth a self-test pass before the exam (not line-by-line re-reading, but explaining out
+loud without looking at the code):**
+- `energy-producer`/`energy-user` — never walked line-by-line, only "same pattern as usage-service". Should
+  be able to explain the kWh formulas (sunFactor/jitter, hour-of-day branching) from memory.
+- RabbitMQ fundamentals in general — why a `direct` exchange (vs. topic/fanout) is the right choice here,
+  exchange/queue/routing-key/binding relationship.
+- The `usage-service` race condition (two messages reading the same DB state, one overwrite) — should be
+  able to walk through the concrete scenario and explain why it wasn't fixed (effort vs. deadline).
+- `WeatherClient`'s `JsonNode` usage (why it's inconsistent with the rest of the project's Jackson style).
+- Docker infra (`docker-compose.yml`, `init.sql`) — what starts, why Postgres/RabbitMQ are separate containers.
+- The full end-to-end flow, narrated without code: sun → producer → energy-queue → usage-service → DB →
+  update-queue → percentage-service → DB → REST → GUI. Likely first exam question.
+
+`WeatherClient` DTO refactor and the `EnergyProducerApp`/`EnergyUserApp` calculator extraction remain
+optional TODOs (see "Further candidates" above) — not required, pick up only if there's time.
 
 ### Plan / order
 1. **JDBC** — walk through `percentage-service/.../PercentageServiceApp.java` line by line:

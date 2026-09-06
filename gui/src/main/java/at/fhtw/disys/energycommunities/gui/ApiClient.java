@@ -15,12 +15,12 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 
-public class ApiClient {
+public class ApiClient { //Standard REST Client
 
     private static final String BASE_URL = "http://localhost:8080";
 
     private final HttpClient httpClient;
-    private final ObjectMapper objectMapper;
+    private final ObjectMapper objectMapper; //
 
     public ApiClient() {
         this.httpClient = HttpClient.newHttpClient();

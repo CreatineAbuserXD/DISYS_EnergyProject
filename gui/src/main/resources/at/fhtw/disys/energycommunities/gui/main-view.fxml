@@ -11,7 +11,7 @@
 <?import javafx.scene.layout.HBox?>
 <?import javafx.scene.layout.VBox?>
 <VBox alignment="TOP_LEFT" spacing="20.0" xmlns:fx="http://javafx.com/fxml"
-      fx:controller="at.fhtw.disys.energycommunities.gui.MainController">
+      fx:controller="at.fhtw.disys.energycommunities.gui.MainController">    <!--sagt loader welche klasse die controller klasse ist(config)-->
     <padding>
         <Insets bottom="20.0" left="20.0" right="20.0" top="20.0"/>
     </padding>
@@ -23,10 +23,10 @@
 
     <!-- Current Energy -->
     <Label text="Current Energy" style="-fx-font-size: 16; -fx-font-weight: bold;"/>
-    <Button text="See Current Energy" onAction="#onSeeCurrentEnergy"/>
+    <Button text="See Current Energy" onAction="#onSeeCurrentEnergy"/>  <!-- onAction sucht @FXML methodName weil EventHandler halt mit Methoden Aufruf-->
 
     <!-- Label für community depleted -->
-    <Label fx:id="communityDepletedLabel" text="Community Depleted: -"/>
+    <Label fx:id="communityDepletedLabel" text="Community Depleted: -"/> <!-- fx:id sucht der loader per reflection ein FXML feld namens fx:id (injiziert die ui node) -->
 
     <!-- Label für grid portion -->
     <Label fx:id="gridPortionLabel" text="Grid Portion: -"/>

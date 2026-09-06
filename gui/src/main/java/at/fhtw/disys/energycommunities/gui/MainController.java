@@ -16,8 +16,9 @@ import java.time.format.DateTimeFormatter;
 import java.util.List;
 
 public class MainController {
-
     private final ApiClient apiClient = new ApiClient();
+
+    //die FXML Felder sind private aber Loader kann sie setzen(Reflection umgeht private)
 
     @FXML
     private Label communityDepletedLabel;
@@ -56,8 +57,9 @@ public class MainController {
     private TableColumn<UsageBucket, Double> gridUsedColumn;
 
     @FXML
-    public void initialize() {
+    public void initialize() { //UI nach dem laden konfigurieren wie man unten sieht
         bucketHourColumn.setCellValueFactory(new PropertyValueFactory<>("bucketHour"));
+        //Für jedes UsageBucket-Objekt in der Tabelle: Hole den Wert von getBucketHour() und zeige ihn in dieser Spalte an.
         communityProducedColumn.setCellValueFactory(new PropertyValueFactory<>("communityProduced"));
         communityUsedColumn.setCellValueFactory(new PropertyValueFactory<>("communityUsed"));
         gridUsedColumn.setCellValueFactory(new PropertyValueFactory<>("gridUsed"));
@@ -65,32 +67,33 @@ public class MainController {
         startDatePicker.setValue(LocalDate.now().minusDays(1));
         endDatePicker.setValue(LocalDate.now());
 
-        setRoundedCellFactory(communityProducedColumn);
+        setRoundedCellFactory(communityProducedColumn); //aufrunden
         setRoundedCellFactory(communityUsedColumn);
         setRoundedCellFactory(gridUsedColumn);
 
-        setGermanFormat(startDatePicker);
+        setGermanFormat(startDatePicker); //auch klar ne? ->
         setGermanFormat(endDatePicker);
 
         for (int hour = 0; hour <= 23; hour++) {
             startHourCombo.getItems().add(hour);
             endHourCombo.getItems().add(hour);
-        }
+        } //füllen mit Int werte
         startHourCombo.setValue(0);
         endHourCombo.setValue(23);
     }
 
+    // Formatiert Double-Werte in den Tabellenzellen auf drei Nachkommastellen: (mit generic)
     private <T> void setRoundedCellFactory(TableColumn<T, Double> column) {
-        column.setCellFactory(col -> new TableCell<>() {
+        column.setCellFactory(col -> new TableCell<>() { //Bestimmt Darstellung einer Tabellenzeile
             @Override
-            protected void updateItem(Double value, boolean empty) {
+            protected void updateItem(Double value, boolean empty) { //wird von JAVAFX beim anzeigen/aktualisieren aufgerufen
                 super.updateItem(value, empty);
                 setText(empty || value == null ? null : String.format("%.3f", value));
             }
         });
     }
 
-    private void setGermanFormat(DatePicker datePicker) {
+    private void setGermanFormat(DatePicker datePicker) { //setzt für DatePicker das Format und konvt zu LocalDate/String
         datePicker.setConverter(new StringConverter<>() {
             final DateTimeFormatter formatter = DateTimeFormatter.ofPattern("d.M.yyyy");
 
@@ -109,17 +112,19 @@ public class MainController {
     }
 
     @FXML
-    public void onSeeCurrentEnergy() {
-        communityDepletedLabel.setText("Community Depleted: loading...");
+    public void onSeeCurrentEnergy() { //EventHandler
+        communityDepletedLabel.setText("Community Depleted: loading..."); //am jfx application thread
         gridPortionLabel.setText("Grid Portion: loading...");
 
-        Task<PercentageRecord> task = new Task<>() {
+        Task<PercentageRecord> task = new Task<>() { //REST-API Schnittstelle anfordern
             @Override
-            protected PercentageRecord call() throws Exception {
-                return apiClient.getCurrentEnergy();
+            protected PercentageRecord call() throws Exception { //call Methode am BackgroundThread
+                return apiClient.getCurrentEnergy(); //liefert ein PercentageRecord
             }
-        };
+        };  // <-- "Das ist die Arbeit, die dieser Task später machen soll"
 
+
+         // -- TASK set on Succeeded/failed setzen nur die Callback-handler was passiert wenn erfolgreich/fehlgeschlagen...
         task.setOnSucceeded(event -> {
             PercentageRecord currentEnergy = task.getValue();
             communityDepletedLabel.setText(String.format(
@@ -131,13 +136,12 @@ public class MainController {
                     currentEnergy.getGridPortion()
             ));
         });
-
         task.setOnFailed(event -> {
-            Throwable exception = task.getException();
-            if (exception instanceof InterruptedException) {
-                Thread.currentThread().interrupt();
+            Throwable exception = task.getException(); //holt die exception
+            if (exception instanceof InterruptedException) { //BACKGROUND Vorgang
+
                 showError("Request was interrupted.");
-            } else if (exception instanceof IOException) {
+            } else if (exception instanceof IOException) { //FEHLERE BEI REST I/O
                 showError("REST API is not reachable. Start the rest-api module first.");
             } else {
                 showError("Could not load current energy data.");
@@ -145,7 +149,7 @@ public class MainController {
         });
 
         Thread thread = new Thread(task);
-        thread.setDaemon(true);
+        thread.setDaemon(true); //Dieser Thread ist nur ein Hintergrund-Thread und soll die JVM nicht am Beenden hindern.
         thread.start();
     }
 
@@ -189,7 +193,7 @@ public class MainController {
         task.setOnFailed(event -> {
             Throwable exception = task.getException();
             if (exception instanceof InterruptedException) {
-                Thread.currentThread().interrupt();
+
                 historicalStatusLabel.setText("Request was interrupted.");
             } else if (exception instanceof IOException) {
                 historicalStatusLabel.setText("REST API is not reachable. Start the rest-api module first.");
