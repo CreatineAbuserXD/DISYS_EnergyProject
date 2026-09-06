@@ -258,7 +258,7 @@ docker compose -f docker/docker-compose.yml up -d
 | 3 | `PercentageServiceApp.java` | 26 (old) | Same — `db` never closed | **Fixed 2026-09-05** — wrapped in try-with-resources |
 | 4 | `UsageServiceApp.java` | 113 (old) | `autoAck=true` — message lost if DB write fails | **Fixed 2026-09-06** — manual `basicAck` (after DB write + publish) / `basicNack` (requeues on `SQLException`) |
 | 5 | `PercentageServiceApp.java` | 84 (old) | Same `autoAck=true` | **Fixed 2026-09-05** — manual `basicAck`/`basicNack` (nack requeues on `SQLException`) |
-| 6 | `EnergyController.java` | 56–57 | `LocalDateTime.parse()` without try-catch → unhandled 500 on bad input | unfixed |
+| 6 | `EnergyController.java` | 56–57 (old) | `LocalDateTime.parse()` without try-catch → unhandled 500 on bad input | **Fixed 2026-09-06** — `getHistorical` now returns `ResponseEntity<?>`, catches `DateTimeParseException`, returns 400 Bad Request with a message instead of an unhandled 500 |
 | 7 | `EnergyMessage.java` | 3 | Unused import: `@JsonProperty` | unfixed |
 | 8 | `MainController.java` | (both `setOnFailed` handlers) | `Thread.currentThread().interrupt()` called on the JavaFX Application Thread, not the background thread that threw `InterruptedException` — no effect, wrong thread | **Fixed 2026-09-06** by Philip — removed from both handlers |
 
@@ -375,12 +375,26 @@ understood conceptually — they reuse the identical RabbitMQ setup pattern, jus
   actually interrupted (which has already terminated by that point). Removed from both handlers
   (`onSeeCurrentEnergy` and `onLoadHistoricalEnergy`) — only `showError(...)`/status label update remains.
 
-**Learning plan status: complete (2026-09-06).** Both JDBC and JavaFX steps walked through, plus a full
-Producer/Consumer picture across the pipeline. `energy-producer`/`energy-user`/`rest-api` remain at
-"conceptually understood" depth (simple modules, same patterns). `WeatherClient` DTO refactor and the
-`EnergyProducerApp`/`EnergyUserApp` calculator extraction remain optional TODOs (see "Further candidates"
-above) — not required for the exam/presentation, pick up only if there's time. If a repetition pass is
-wanted before the exam, this file plus the two "Lecturer feedback" walkthroughs are the full picture.
+**Learning plan status: core done (2026-09-06), but Philip flagged it feels too thin — doing a self-check
+pass before the exam rather than trusting "done".** Solid depth (line-by-line, can explain bugs/tradeoffs):
+JDBC (`UsageServiceApp`/`PercentageServiceApp`), JavaFX (`GuiApplication`/`MainController`/`ApiClient`/FXML),
+REST-API basic pattern (`JdbcTemplate`, RowMapper, annotations).
+
+**Still shallow — worth a self-test pass before the exam (not line-by-line re-reading, but explaining out
+loud without looking at the code):**
+- `energy-producer`/`energy-user` — never walked line-by-line, only "same pattern as usage-service". Should
+  be able to explain the kWh formulas (sunFactor/jitter, hour-of-day branching) from memory.
+- RabbitMQ fundamentals in general — why a `direct` exchange (vs. topic/fanout) is the right choice here,
+  exchange/queue/routing-key/binding relationship.
+- The `usage-service` race condition (two messages reading the same DB state, one overwrite) — should be
+  able to walk through the concrete scenario and explain why it wasn't fixed (effort vs. deadline).
+- `WeatherClient`'s `JsonNode` usage (why it's inconsistent with the rest of the project's Jackson style).
+- Docker infra (`docker-compose.yml`, `init.sql`) — what starts, why Postgres/RabbitMQ are separate containers.
+- The full end-to-end flow, narrated without code: sun → producer → energy-queue → usage-service → DB →
+  update-queue → percentage-service → DB → REST → GUI. Likely first exam question.
+
+`WeatherClient` DTO refactor and the `EnergyProducerApp`/`EnergyUserApp` calculator extraction remain
+optional TODOs (see "Further candidates" above) — not required, pick up only if there's time.
 
 ### Plan / order
 1. **JDBC** — walk through `percentage-service/.../PercentageServiceApp.java` line by line:

@@ -2,6 +2,7 @@ package at.fhtw.disys.energycommunities.restapi.controller;
 
 import at.fhtw.disys.energycommunities.shared.model.PercentageRecord;
 import at.fhtw.disys.energycommunities.shared.model.UsageBucket;
+import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -9,11 +10,12 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.LocalDateTime;
+import java.time.format.DateTimeParseException;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 
-@RestController
-@RequestMapping("/energy")
+@RestController //"Diese Klasse bietet HTTP Endpoints an. (eh kloa)
+@RequestMapping("/energy") //"Alle APIs begennen mit /energy .
 public class EnergyController {
 
     // Spring stellt das JdbcTemplate automatisch bereit (Verbindung aus den application.properties).
@@ -21,9 +23,9 @@ public class EnergyController {
 
     public EnergyController(JdbcTemplate jdbcTemplate) {
         this.jdbcTemplate = jdbcTemplate;
-    }
+    } //Dependency Injection von Spring
 
-    @GetMapping("/current")
+    @GetMapping("/current")    //--> /energy/current
     public PercentageRecord getCurrent() {
         LocalDateTime currentHour = LocalDateTime.now().truncatedTo(ChronoUnit.HOURS);
 
@@ -49,14 +51,20 @@ public class EnergyController {
     }
 
     @GetMapping("/historical")
-    public List<UsageBucket> getHistorical(
+    public ResponseEntity<?> getHistorical(
             @RequestParam String start,
             @RequestParam String end) {
 
-        LocalDateTime startTime = LocalDateTime.parse(start);
-        LocalDateTime endTime = LocalDateTime.parse(end);
+        LocalDateTime startTime;
+        LocalDateTime endTime;
+        try {
+            startTime = LocalDateTime.parse(start);
+            endTime = LocalDateTime.parse(end);
+        } catch (DateTimeParseException e) {
+            return ResponseEntity.badRequest().body("Invalid date format, expected e.g. 2024-01-01T14:00:00");
+        }
 
-        return jdbcTemplate.query(
+        List<UsageBucket> buckets = jdbcTemplate.query(
                 "SELECT bucket_hour, community_produced, community_used, grid_used FROM usage_bucket "
                         + "WHERE bucket_hour BETWEEN ? AND ? ORDER BY bucket_hour",
                 (rs, rowNum) -> {
@@ -68,5 +76,7 @@ public class EnergyController {
                     return bucket;
                 },
                 startTime, endTime);
+
+        return ResponseEntity.ok(buckets);
     }
 }
