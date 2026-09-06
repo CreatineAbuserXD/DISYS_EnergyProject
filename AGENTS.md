@@ -297,9 +297,13 @@ separate, unrelated point: deduction for insufficient explanation during present
   in the app, not pulled into a repository — that would be the next, bigger step (full repository pattern).
 
 **Further candidates (not started), ordered by effort/risk:**
-1. `WeatherClient` (energy-producer) → replace `objectMapper.readTree(...)` / `JsonNode` navigation with a
-   proper DTO (e.g. `record WeatherResponse(Current current) { record Current(@JsonProperty("cloud_cover_low") double cloudCoverLow) {} }`).
-   Smallest, most isolated fix — directly addresses the JsonNode-instead-of-DTO comment.
+1. **TODO / nice-to-have, deferred 2026-09-06 for time reasons:** `WeatherClient` (energy-producer) →
+   replace `objectMapper.readTree(...)` / `JsonNode` navigation with a proper DTO (e.g.
+   `record WeatherResponse(Current current) { record Current(@JsonProperty("cloud_cover_low") double cloudCoverLow) {} }`).
+   Smallest, most isolated fix — directly addresses the JsonNode-instead-of-DTO comment. Why it matters:
+   `.path(...).asDouble()` on a missing/typo'd key silently returns `0.0` instead of failing loudly —
+   a DTO would throw instead. Not urgent (no bug today), just the last inconsistency vs. the rest of
+   the project's Jackson usage.
 2. Extract the kWh-calculation out of `EnergyProducerApp` (sunFactor/jitter formula) and `EnergyUserApp`
    (hour-of-day branching) into their own pure calculator classes — same pattern as `PercentageCalculator`/
    `UsageCalculator` above.
@@ -329,12 +333,37 @@ Goal: understand this project well enough to explain the code snippets (exam/pre
 Estimated total time: 4–6h (more like 6–8h if JDBC/JavaFX are completely new), best split over
 2 sessions.
 
-**Status (2026-09-05): step 1 (JDBC via `PercentageServiceApp.java`) done — full line-by-line
-walkthrough incl. RabbitMQ connection/channel/exchange/queue/binding, `DeliverCallback`/`basicConsume`,
-consumerTag, and Producer/Consumer roles across the pipeline. Bugs #1/#3/#5 fixed in that file as a
-hands-on exercise (try-with-resources + manual ack/nack) — see "Known Bugs" table. Next: step 2, JavaFX
-via the `gui` module (or, if preferred, first do the equivalent JDBC walkthrough of
-`UsageServiceApp.java`, which was used for comparison but not fixed).**
+**Status (2026-09-06, evening): step 1 (JDBC) fully done for BOTH `PercentageServiceApp.java` and
+`UsageServiceApp.java` — line-by-line walkthrough incl. RabbitMQ connection/channel/exchange/queue/
+binding, `DeliverCallback`/`basicConsume`, consumerTag, and Producer/Consumer roles across the pipeline
+(`UsageServiceApp` is the only class that's both Consumer of `energy-queue` AND Producer to
+`update-queue`). Both files fully remediated (see "Known Bugs" table + "Lecturer feedback" section) —
+try-with-resources, manual ack/nack, `PercentageCalculator`/`UsageCalculator` extraction,
+`CountDownLatch` instead of `Thread.currentThread().join()` (verified redundant either way via
+`amqp-client` sources — RabbitMQ's own consumer thread is non-daemon). Both compile clean (verified
+via manual `javac` — no `mvn` available in this environment).
+
+`energy-producer`/`energy-user` were NOT individually walked through line-by-line, but are considered
+understood conceptually — they reuse the identical RabbitMQ setup pattern, just as Producer-only
+(`basicPublish` in a `while(true)` loop instead of `DeliverCallback`/`basicConsume`).
+
+**Step 2 (JavaFX) started 2026-09-06, brief intro only:**
+- `GuiApplication.java`: `Application`/`launch()`/`start(Stage)` lifecycle (JavaFX calls `start()`,
+  never called manually — same idea as `DeliverCallback` being framework-invoked), `Stage` (=window)
+  vs `Scene` (=content, fixed size, one active per Stage at a time), `FXMLLoader` (builds the scene
+  graph from FXML instead of manual `new Button()` etc.).
+- `main-view.fxml`: `fx:controller` (which Java class is the controller), `fx:id` (FXMLLoader injects
+  the built UI node into a same-named `@FXML` field on the controller via reflection), `onAction="#method"`
+  (wires a button click to a controller method, also by name via reflection).
+- **Not yet done:** `MainController.java` (the actual logic behind the buttons/table) and
+  `ApiClient.java` (`HttpClient` + Jackson, how the GUI polls the REST API) — planned as tomorrow's
+  starting point.
+
+**Next session: resume with `MainController.java` + `ApiClient.java`**, then a full repetition/review
+pass across everything (Philip's own plan: "wenn ich morgen wiederhole verstehe ich die services zu
+100%") ahead of an exam/presentation context. `WeatherClient` DTO refactor and the
+`EnergyProducerApp`/`EnergyUserApp` calculator extraction remain as optional TODOs (see "Further
+candidates" above) — not required, pick up only if there's time.
 
 ### Plan / order
 1. **JDBC** — walk through `percentage-service/.../PercentageServiceApp.java` line by line:
