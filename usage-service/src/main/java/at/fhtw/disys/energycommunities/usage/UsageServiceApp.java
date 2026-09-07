@@ -44,6 +44,8 @@ public class UsageServiceApp {
 
             System.out.println("Connected to database.");
 
+            // "direct": Routing Key muss exakt zum Binding passen (kein Pattern wie bei "topic", kein Broadcast wie bei "fanout") —
+            // reicht hier, weil es nur die zwei fixen Routing Keys "energy"/"update" gibt, je genau einer eigenen Queue zugeordnet.
             channel.exchangeDeclare(RabbitMQConfig.EXCHANGE_NAME, "direct", true);
             channel.queueDeclare(RabbitMQConfig.QUEUE_ENERGY, true, false, false, null);
             channel.queueBind(RabbitMQConfig.QUEUE_ENERGY, RabbitMQConfig.EXCHANGE_NAME, RabbitMQConfig.ROUTING_KEY_ENERGY);
@@ -51,6 +53,12 @@ public class UsageServiceApp {
             channel.queueDeclare(RabbitMQConfig.QUEUE_UPDATE, true, false, false, null);
             channel.queueBind(RabbitMQConfig.QUEUE_UPDATE, RabbitMQConfig.EXCHANGE_NAME, RabbitMQConfig.ROUTING_KEY_UPDATE);
 
+            // event-driven: dieser Callback wird nicht aktiv aufgerufen, sondern von RabbitMQ ausgelöst,
+            // Lambda Objekt wird erstelt und speiche es in der Vaiable deliverCallback
+            // sobald eine Nachricht in energy-queue ankommt (das "Event") — kein Polling, kein Warten im Code.
+            // Body läuft hier noch NICHT — erst channel.basicConsume(...) weiter unten registriert dieses
+            // Objekt beim RabbitMQ-Client als Handler; ausgeführt wird der Body dann später, auf einem
+            // eigenen Thread des RabbitMQ-Clients, jedes Mal wenn tatsächlich eine Nachricht ankommt.
             DeliverCallback deliverCallback = (consumerTag, delivery) -> {
                 String json = new String(delivery.getBody(), StandardCharsets.UTF_8);
                 EnergyMessage message = objectMapper.readValue(json, EnergyMessage.class);
@@ -115,7 +123,7 @@ public class UsageServiceApp {
 
             // Consumer starten. autoAck=false: Nachricht wird erst nach erfolgreichem DB-Write + Publish bestaetigt
             channel.basicConsume(RabbitMQConfig.QUEUE_ENERGY, false, deliverCallback, consumerTag -> {
-            });
+            }); //consumerTAG->ID die diese consumer regist. identifiziert (interface brauchts aber wird nicht benutzt?)
 
             System.out.println("Waiting for messages...");
             // Service läuft einfach weiter, auch wenn keine Messages mehr in der Queue sind

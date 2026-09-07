@@ -2,6 +2,10 @@ package at.fhtw.disys.energycommunities.percentage;
 
 /**
  * Reine Berechnung, kein I/O — dadurch isoliert testbar ohne RabbitMQ/DB.
+ * Zweite Pipeline-Stufe: nimmt die absoluten kWh-Werte, die UsageService bereits
+ * berechnet hat (aus der update-queue), und übersetzt sie in relative Prozentwerte
+ * fürs Dashboard — eigener Service statt Teil von UsageService, weil andere fachliche
+ * Aufgabe (Interpretation statt Aggregation) und eigene Tabelle/eigener Endpoint (current vs. historical).
  */
 public final class PercentageCalculator {
 

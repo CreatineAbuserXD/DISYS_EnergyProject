@@ -17,7 +17,8 @@ public final class UsageCalculator {
         } else { // USER
             double available = produced - used;         // noch verfügbare Gemeinschaftsenergie
             double fromCommunity = Math.min(kwh, available); // zuerst aus der Gemeinschaft
-            double fromGrid = kwh - fromCommunity;       // Rest aus dem Netz
+            double fromGrid = kwh - fromCommunity;       // Rest aus dem Netz — "grid" ist rein virtuell,
+            // kein echter Akteur schickt Grid-Nachrichten, es ist nur die Restgröße dieser Rechnung
             used += fromCommunity;
             grid += fromGrid;
         }
